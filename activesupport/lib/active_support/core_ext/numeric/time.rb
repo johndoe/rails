@@ -1,81 +1,66 @@
-module ActiveSupport #:nodoc:
-  module CoreExtensions #:nodoc:
-    module Numeric #:nodoc:
-      # Enables the use of time calculations and declarations, like 45.minutes + 2.hours + 4.years.
-      #
-      # These methods use Time#advance for precise date calculations when using from_now, ago, etc. 
-      # as well as adding or subtracting their results from a Time object. For example:
-      #
-      #   # equivalent to Time.now.advance(:months => 1)
-      #   1.month.from_now
-      #
-      #   # equivalent to Time.now.advance(:years => 2)
-      #   2.years.from_now
-      #
-      #   # equivalent to Time.now.advance(:months => 4, :years => 5)
-      #   (4.months + 5.years).from_now
-      # 
-      # While these methods provide precise calculation when used as in the examples above, care
-      # should be taken to note that this is not true if the result of `months', `years', etc is
-      # converted before use:
-      #
-      #   # equivalent to 30.days.to_i.from_now
-      #   1.month.to_i.from_now
-      #
-      #   # equivalent to 365.25.days.to_f.from_now
-      #   1.year.to_f.from_now
-      #
-      # In such cases, Ruby's core 
-      # Date[http://stdlib.rubyonrails.org/libdoc/date/rdoc/index.html] and 
-      # Time[http://stdlib.rubyonrails.org/libdoc/time/rdoc/index.html] should be used for precision
-      # date and time arithmetic
-      module Time
-        def seconds
-          ActiveSupport::Duration.new(self, [[:seconds, self]])
-        end
-        alias :second :seconds
+# frozen_string_literal: true
 
-        def minutes
-          ActiveSupport::Duration.new(self * 60, [[:seconds, self * 60]])
-        end
-        alias :minute :minutes  
-        
-        def hours
-          ActiveSupport::Duration.new(self * 3600, [[:seconds, self * 3600]])
-        end
-        alias :hour :hours
-        
-        def days
-          ActiveSupport::Duration.new(self * 24.hours, [[:days, self]])
-        end
-        alias :day :days
+require "active_support/duration"
+require "active_support/core_ext/time/calculations"
+require "active_support/core_ext/time/acts_like"
+require "active_support/core_ext/date/calculations"
+require "active_support/core_ext/date/acts_like"
 
-        def weeks
-          ActiveSupport::Duration.new(self * 7.days, [[:days, self * 7]])
-        end
-        alias :week :weeks
-        
-        def fortnights
-          ActiveSupport::Duration.new(self * 2.weeks, [[:days, self * 14]])
-        end
-        alias :fortnight :fortnights
-        
-        # Reads best without arguments:  10.minutes.ago
-        def ago(time = ::Time.now)
-          time - self
-        end
+class Numeric
+  # Returns a Duration instance matching the number of seconds provided.
+  #
+  #   2.seconds # => 2 seconds
+  def seconds
+    ActiveSupport::Duration.seconds(self)
+  end
+  alias :second :seconds
 
-        # Reads best with argument:  10.minutes.until(time)
-        alias :until :ago
+  # Returns a Duration instance matching the number of minutes provided.
+  #
+  #   2.minutes # => 2 minutes
+  def minutes
+    ActiveSupport::Duration.minutes(self)
+  end
+  alias :minute :minutes
 
-        # Reads best with argument:  10.minutes.since(time)
-        def since(time = ::Time.now)
-          time + self
-        end
+  # Returns a Duration instance matching the number of hours provided.
+  #
+  #   2.hours # => 2 hours
+  def hours
+    ActiveSupport::Duration.hours(self)
+  end
+  alias :hour :hours
 
-        # Reads best without arguments:  10.minutes.from_now
-        alias :from_now :since
-      end
-    end
+  # Returns a Duration instance matching the number of days provided.
+  #
+  #   2.days # => 2 days
+  def days
+    ActiveSupport::Duration.days(self)
+  end
+  alias :day :days
+
+  # Returns a Duration instance matching the number of weeks provided.
+  #
+  #   2.weeks # => 2 weeks
+  def weeks
+    ActiveSupport::Duration.weeks(self)
+  end
+  alias :week :weeks
+
+  # Returns a Duration instance matching the number of fortnights provided.
+  #
+  #   2.fortnights # => 4 weeks
+  def fortnights
+    ActiveSupport::Duration.weeks(self * 2)
+  end
+  alias :fortnight :fortnights
+
+  # Returns the number of milliseconds equivalent to the seconds provided.
+  # Used with the standard time durations.
+  #
+  #   2.in_milliseconds # => 2000
+  #   1.hour.in_milliseconds # => 3600000
+  def in_milliseconds
+    self * 1000
   end
 end

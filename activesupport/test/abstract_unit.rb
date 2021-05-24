@@ -1,43 +1,51 @@
-# encoding: utf-8
+# frozen_string_literal: true
 
-require 'test/unit'
+ORIG_ARGV = ARGV.dup
 
-$:.unshift "#{File.dirname(__FILE__)}/../lib"
-$:.unshift File.dirname(__FILE__)
-require 'active_support'
+require "bundler/setup"
+require "active_support/core_ext/kernel/reporting"
 
-if RUBY_VERSION < '1.9'
-  $KCODE = 'UTF8'
+silence_warnings do
+  Encoding.default_internal = Encoding::UTF_8
+  Encoding.default_external = Encoding::UTF_8
 end
 
-def uses_gem(gem_name, test_name, version = '> 0')
-  require 'rubygems'
-  gem gem_name.to_s, version
-  require gem_name.to_s
-  yield
-rescue LoadError
-  $stderr.puts "Skipping #{test_name} tests. `gem install #{gem_name}` and try again."
-end
+require "active_support/testing/autorun"
+require "active_support/testing/method_call_assertions"
 
-# Wrap tests that use Mocha and skip if unavailable.
-unless defined? uses_mocha
-  def uses_mocha(test_name, &block)
-    uses_gem('mocha', test_name, '>= 0.5.5', &block)
-  end
-end
+ENV["NO_RELOAD"] = "1"
+require "active_support"
+
+Thread.abort_on_exception = true
 
 # Show backtraces for deprecated behavior for quicker cleanup.
 ActiveSupport::Deprecation.debug = true
 
-def with_kcode(code)
-  if RUBY_VERSION < '1.9'
-    begin
-      old_kcode, $KCODE = $KCODE, code
-      yield
-    ensure
-      $KCODE = old_kcode
-    end
+# Default to old to_time behavior but allow running tests with new behavior
+ActiveSupport.to_time_preserves_timezone = ENV["PRESERVE_TIMEZONES"] == "1"
+
+# Disable available locale checks to avoid warnings running the test suite.
+I18n.enforce_available_locales = false
+
+class ActiveSupport::TestCase
+  if Process.respond_to?(:fork) && !Gem.win_platform?
+    parallelize
   else
-    yield
+    parallelize(with: :threads)
   end
+
+  include ActiveSupport::Testing::MethodCallAssertions
+
+  private
+    # Skips the current run on Rubinius using Minitest::Assertions#skip
+    def rubinius_skip(message = "")
+      skip message if RUBY_ENGINE == "rbx"
+    end
+
+    # Skips the current run on JRuby using Minitest::Assertions#skip
+    def jruby_skip(message = "")
+      skip message if defined?(JRUBY_VERSION)
+    end
 end
+
+require_relative "../../tools/test_common"

@@ -1,13 +1,9 @@
-require 'active_support/core_ext/array/access'
-require 'active_support/core_ext/array/conversions'
-require 'active_support/core_ext/array/extract_options'
-require 'active_support/core_ext/array/grouping'
-require 'active_support/core_ext/array/random_access'
+# frozen_string_literal: true
 
-class Array #:nodoc:
-  include ActiveSupport::CoreExtensions::Array::Access
-  include ActiveSupport::CoreExtensions::Array::Conversions
-  include ActiveSupport::CoreExtensions::Array::ExtractOptions
-  include ActiveSupport::CoreExtensions::Array::Grouping
-  include ActiveSupport::CoreExtensions::Array::RandomAccess
-end
+require "active_support/core_ext/array/wrap"
+require "active_support/core_ext/array/access"
+require "active_support/core_ext/array/conversions"
+require "active_support/core_ext/array/extract"
+require "active_support/core_ext/array/extract_options"
+require "active_support/core_ext/array/grouping"
+require "active_support/core_ext/array/inquiry"

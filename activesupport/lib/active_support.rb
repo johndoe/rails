@@ -1,5 +1,7 @@
+# frozen_string_literal: true
+
 #--
-# Copyright (c) 2005 David Heinemeier Hansson
+# Copyright (c) 2005-2021 David Heinemeier Hansson
 #
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files (the
@@ -21,45 +23,99 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #++
 
-require 'active_support/vendor'
-require 'active_support/basic_object'
-require 'active_support/inflector'
-require 'active_support/callbacks'
+require "securerandom"
+require "active_support/dependencies/autoload"
+require "active_support/version"
+require "active_support/logger"
+require "active_support/lazy_load_hooks"
+require "active_support/core_ext/date_and_time/compatibility"
 
-require 'active_support/core_ext'
+module ActiveSupport
+  extend ActiveSupport::Autoload
 
-require 'active_support/buffered_logger'
+  autoload :Concern
+  autoload :ActionableError
+  autoload :ConfigurationFile
+  autoload :CurrentAttributes
+  autoload :Dependencies
+  autoload :DescendantsTracker
+  autoload :ExecutionWrapper
+  autoload :Executor
+  autoload :FileUpdateChecker
+  autoload :EventedFileUpdateChecker
+  autoload :ForkTracker
+  autoload :LogSubscriber
+  autoload :Notifications
+  autoload :Reloader
+  autoload :SecureCompareRotator
 
-require 'active_support/gzip'
-require 'active_support/cache'
+  eager_autoload do
+    autoload :BacktraceCleaner
+    autoload :ProxyObject
+    autoload :Benchmarkable
+    autoload :Cache
+    autoload :Callbacks
+    autoload :Configurable
+    autoload :Deprecation
+    autoload :Digest
+    autoload :Gzip
+    autoload :Inflector
+    autoload :JSON
+    autoload :KeyGenerator
+    autoload :MessageEncryptor
+    autoload :MessageVerifier
+    autoload :Multibyte
+    autoload :NumberHelper
+    autoload :OptionMerger
+    autoload :OrderedHash
+    autoload :OrderedOptions
+    autoload :StringInquirer
+    autoload :EnvironmentInquirer
+    autoload :TaggedLogging
+    autoload :XmlMini
+    autoload :ArrayInquirer
+  end
 
-require 'active_support/dependencies'
-require 'active_support/deprecation'
+  autoload :Rescuable
+  autoload :SafeBuffer, "active_support/core_ext/string/output_safety"
+  autoload :TestCase
 
-require 'active_support/ordered_hash'
-require 'active_support/ordered_options'
-require 'active_support/option_merger'
+  def self.eager_load!
+    super
 
-require 'active_support/memoizable'
-require 'active_support/string_inquirer'
+    NumberHelper.eager_load!
+  end
 
-require 'active_support/values/time_zone'
-require 'active_support/duration'
+  cattr_accessor :test_order # :nodoc:
+  cattr_accessor :test_parallelization_disabled, default: false # :nodoc:
 
-require 'active_support/json'
+  def self.disable_test_parallelization!
+    self.test_parallelization_disabled = true unless ENV["PARALLEL_WORKERS"]
+  end
 
-require 'active_support/multibyte'
+  def self.cache_format_version
+    Cache.format_version
+  end
 
-require 'active_support/base64'
+  def self.cache_format_version=(value)
+    Cache.format_version = value
+  end
 
-require 'active_support/time_with_zone'
+  def self.to_time_preserves_timezone
+    DateAndTime::Compatibility.preserve_timezone
+  end
 
-require 'active_support/secure_random'
+  def self.to_time_preserves_timezone=(value)
+    DateAndTime::Compatibility.preserve_timezone = value
+  end
 
-require 'active_support/rescuable'
+  def self.utc_to_local_returns_utc_offset_times
+    DateAndTime::Compatibility.utc_to_local_returns_utc_offset_times
+  end
 
-I18n.load_path << File.dirname(__FILE__) + '/active_support/locale/en-US.yml'
+  def self.utc_to_local_returns_utc_offset_times=(value)
+    DateAndTime::Compatibility.utc_to_local_returns_utc_offset_times = value
+  end
+end
 
-Inflector = ActiveSupport::Deprecation::DeprecatedConstantProxy.new('Inflector', 'ActiveSupport::Inflector')
-Dependencies = ActiveSupport::Deprecation::DeprecatedConstantProxy.new('Dependencies', 'ActiveSupport::Dependencies')
-TimeZone = ActiveSupport::Deprecation::DeprecatedConstantProxy.new('TimeZone', 'ActiveSupport::TimeZone')
+autoload :I18n, "active_support/i18n"

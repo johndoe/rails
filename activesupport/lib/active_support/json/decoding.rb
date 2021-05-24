@@ -1,61 +1,73 @@
-require 'yaml'
-require 'strscan'
+# frozen_string_literal: true
+
+require "active_support/core_ext/module/attribute_accessors"
+require "active_support/core_ext/module/delegation"
+require "json"
 
 module ActiveSupport
+  # Look for and parse json strings that look like ISO 8601 times.
+  mattr_accessor :parse_json_times
+
   module JSON
-    class ParseError < StandardError
-    end
-    
+    # matches YAML-formatted dates
+    DATE_REGEX = /\A\d{4}-\d{2}-\d{2}\z/
+    DATETIME_REGEX = /\A(?:\d{4}-\d{2}-\d{2}|\d{4}-\d{1,2}-\d{1,2}[T \t]+\d{1,2}:\d{2}:\d{2}(\.[0-9]*)?(([ \t]*)Z|[-+]\d{2}?(:\d{2})?)?)\z/
+
     class << self
-      # Converts a JSON string into a Ruby object.
+      # Parses a JSON string (JavaScript Object Notation) into a hash.
+      # See http://www.json.org for more info.
+      #
+      #   ActiveSupport::JSON.decode("{\"team\":\"rails\",\"players\":\"36\"}")
+      #   => {"team" => "rails", "players" => "36"}
       def decode(json)
-        YAML.load(convert_json_to_yaml(json))
-      rescue ArgumentError => e
-        raise ParseError, "Invalid JSON string"
+        data = ::JSON.parse(json, quirks_mode: true)
+
+        if ActiveSupport.parse_json_times
+          convert_dates_from(data)
+        else
+          data
+        end
       end
-      
-      protected
-        # matches YAML-formatted dates
-        DATE_REGEX = /^\d{4}-\d{2}-\d{2}|\d{4}-\d{1,2}-\d{1,2}[ \t]+\d{1,2}:\d{2}:\d{2}(\.[0-9]*)?(([ \t]*)Z|[-+]\d{2}?(:\d{2})?)?$/
 
-        # Ensure that ":" and "," are always followed by a space
-        def convert_json_to_yaml(json) #:nodoc:
-          scanner, quoting, marks, pos, times = StringScanner.new(json), false, [], nil, []
-          while scanner.scan_until(/(\\['"]|['":,\\]|\\.)/)
-            case char = scanner[1]
-            when '"', "'"
-              if !quoting
-                quoting = char
-                pos = scanner.pos
-              elsif quoting == char
-                if json[pos..scanner.pos-2] =~ DATE_REGEX
-                  # found a date, track the exact positions of the quotes so we can remove them later.
-                  # oh, and increment them for each current mark, each one is an extra padded space that bumps
-                  # the position in the final YAML output
-                  total_marks = marks.size
-                  times << pos+total_marks << scanner.pos+total_marks
-                end
-                quoting = false
-              end
-            when ":",","
-              marks << scanner.pos - 1 unless quoting
+      # Returns the class of the error that will be raised when there is an
+      # error in decoding JSON. Using this method means you won't directly
+      # depend on the ActiveSupport's JSON implementation, in case it changes
+      # in the future.
+      #
+      #   begin
+      #     obj = ActiveSupport::JSON.decode(some_string)
+      #   rescue ActiveSupport::JSON.parse_error
+      #     Rails.logger.warn("Attempted to decode invalid JSON: #{some_string}")
+      #   end
+      def parse_error
+        ::JSON::ParserError
+      end
+
+      private
+        def convert_dates_from(data)
+          case data
+          when nil
+            nil
+          when DATE_REGEX
+            begin
+              Date.parse(data)
+            rescue ArgumentError
+              data
             end
-          end
-
-          if marks.empty?
-            json.gsub(/\\\//, '/')
+          when DATETIME_REGEX
+            begin
+              Time.zone.parse(data)
+            rescue ArgumentError
+              data
+            end
+          when Array
+            data.map! { |d| convert_dates_from(d) }
+          when Hash
+            data.transform_values! do |value|
+              convert_dates_from(value)
+            end
           else
-            left_pos  = [-1].push(*marks)
-            right_pos = marks << json.length
-            output    = []
-            left_pos.each_with_index do |left, i|
-              output << json[left.succ..right_pos[i]]
-            end
-            output = output * " "
-            
-            times.each { |i| output[i-1] = ' ' }
-            output.gsub!(/\\\//, '/')
-            output
+            data
           end
         end
     end

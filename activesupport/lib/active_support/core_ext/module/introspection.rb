@@ -1,90 +1,63 @@
-module ActiveSupport
-  module CoreExtensions
-    module Module
-      # Returns the name of the module containing this one.
-      #
-      #   p M::N.parent_name # => "M"
-      def parent_name
-        unless defined? @parent_name
-          @parent_name = name =~ /::[^:]+\Z/ ? $`.freeze : nil
-        end
-        @parent_name
-      end
+# frozen_string_literal: true
 
-      # Returns the module which contains this one according to its name.
-      #
-      #   module M
-      #     module N
-      #     end
-      #   end
-      #   X = M::N
-      #
-      #   p M::N.parent # => M
-      #   p X.parent    # => M
-      #
-      # The parent of top-level and anonymous modules is Object.
-      #
-      #   p M.parent          # => Object
-      #   p Module.new.parent # => Object
-      #
-      def parent
-        parent_name ? parent_name.constantize : Object
-      end
+require "active_support/core_ext/string/filters"
+require "active_support/inflector"
 
-      # Returns all the parents of this module according to its name, ordered from
-      # nested outwards. The receiver is not contained within the result.
-      #
-      #   module M
-      #     module N
-      #     end
-      #   end
-      #   X = M::N
-      #
-      #   p M.parents    # => [Object]
-      #   p M::N.parents # => [M, Object]
-      #   p X.parents    # => [M, Object]
-      #
-      def parents
-        parents = []
-        if parent_name
-          parts = parent_name.split('::')
-          until parts.empty?
-            parents << (parts * '::').constantize
-            parts.pop
-          end
-        end
-        parents << Object unless parents.include? Object
-        parents
-      end
+class Module
+  # Returns the name of the module containing this one.
+  #
+  #   M::N.module_parent_name # => "M"
+  def module_parent_name
+    if defined?(@parent_name)
+      @parent_name
+    else
+      parent_name = name =~ /::[^:]+\z/ ? -$` : nil
+      @parent_name = parent_name unless frozen?
+      parent_name
+    end
+  end
 
-      if RUBY_VERSION < '1.9'
-        # Returns the constants that have been defined locally by this object and
-        # not in an ancestor. This method is exact if running under Ruby 1.9. In
-        # previous versions it may miss some constants if their definition in some
-        # ancestor is identical to their definition in the receiver.
-        def local_constants
-          inherited = {}
+  # Returns the module which contains this one according to its name.
+  #
+  #   module M
+  #     module N
+  #     end
+  #   end
+  #   X = M::N
+  #
+  #   M::N.module_parent # => M
+  #   X.module_parent    # => M
+  #
+  # The parent of top-level and anonymous modules is Object.
+  #
+  #   M.module_parent          # => Object
+  #   Module.new.module_parent # => Object
+  def module_parent
+    module_parent_name ? ActiveSupport::Inflector.constantize(module_parent_name) : Object
+  end
 
-          ancestors.each do |anc|
-            next if anc == self
-            anc.constants.each { |const| inherited[const] = anc.const_get(const) }
-          end
-
-          constants.select do |const|
-            !inherited.key?(const) || inherited[const].object_id != const_get(const).object_id
-          end
-        end
-      else
-        def local_constants #:nodoc:
-          constants(false)
-        end
-      end
-
-      # Returns the names of the constants defined locally rather than the
-      # constants themselves. See <tt>local_constants</tt>.
-      def local_constant_names
-        local_constants.map { |c| c.to_s }
+  # Returns all the parents of this module according to its name, ordered from
+  # nested outwards. The receiver is not contained within the result.
+  #
+  #   module M
+  #     module N
+  #     end
+  #   end
+  #   X = M::N
+  #
+  #   M.module_parents    # => [Object]
+  #   M::N.module_parents # => [M, Object]
+  #   X.module_parents    # => [M, Object]
+  def module_parents
+    parents = []
+    if module_parent_name
+      parts = module_parent_name.split("::")
+      until parts.empty?
+        parents << ActiveSupport::Inflector.constantize(parts * "::")
+        parts.pop
       end
     end
+    parents << Object unless parents.include? Object
+    parents
   end
 end

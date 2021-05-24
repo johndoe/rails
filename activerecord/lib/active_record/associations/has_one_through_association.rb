@@ -1,32 +1,51 @@
+# frozen_string_literal: true
+
 module ActiveRecord
   module Associations
-    class HasOneThroughAssociation < HasManyThroughAssociation
-      
-      def create_through_record(new_value) #nodoc:
-        klass = @reflection.through_reflection.klass
+    # = Active Record Has One Through Association
+    class HasOneThroughAssociation < HasOneAssociation #:nodoc:
+      include ThroughAssociation
 
-        current_object = @owner.send(@reflection.through_reflection.name)
-        
-        if current_object
-          klass.destroy(current_object)
-          @owner.clear_association_cache
-        end
-        
-        @owner.send(@reflection.through_reflection.name,  klass.send(:create, construct_join_attributes(new_value)))
-      end
-      
-    private
-      def find(*args)
-        super(args.merge(:limit => 1))
-      end
-    
       def find_target
-        super.first
+        return scope.first if disable_joins
+
+        super
       end
 
-      def reset_target!
-        @target = nil
-      end        
-    end        
+      private
+        def replace(record, save = true)
+          create_through_record(record, save)
+          self.target = record
+        end
+
+        def create_through_record(record, save)
+          ensure_not_nested
+
+          through_proxy  = through_association
+          through_record = through_proxy.load_target
+
+          if through_record && !record
+            through_record.destroy
+          elsif record
+            attributes = construct_join_attributes(record)
+
+            if through_record && through_record.destroyed?
+              through_record = through_proxy.tap(&:reload).target
+            end
+
+            if through_record
+              if through_record.new_record?
+                through_record.assign_attributes(attributes)
+              else
+                through_record.update(attributes)
+              end
+            elsif owner.new_record? || !save
+              through_proxy.build(attributes)
+            else
+              through_proxy.create(attributes)
+            end
+          end
+        end
+    end
   end
 end

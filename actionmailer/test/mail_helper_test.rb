@@ -1,95 +1,124 @@
-require 'abstract_unit'
+# frozen_string_literal: true
 
-module MailerHelper
-  def person_name
-    "Mr. Joe Person"
-  end
-end
+require "abstract_unit"
 
 class HelperMailer < ActionMailer::Base
-  helper MailerHelper
-  helper :example
+  def use_mail_helper
+    @text = "But soft! What light through yonder window breaks? It is the east, " \
+            "and Juliet is the sun. Arise, fair sun, and kill the envious moon, " \
+            "which is sick and pale with grief that thou, her maid, art far more " \
+            "fair than she. Be not her maid, for she is envious! Her vestal " \
+            "livery is but sick and green, and none but fools do wear it. Cast " \
+            "it off!"
 
-  def use_helper(recipient)
-    recipients recipient
-    subject    "using helpers"
-    from       "tester@example.com"
+    mail_with_defaults do |format|
+      format.html { render(inline: "<%= block_format @text %>") }
+    end
   end
 
-  def use_example_helper(recipient)
-    recipients recipient
-    subject    "using helpers"
-    from       "tester@example.com"
-    self.body = { :text => "emphasize me!" }
+  def use_format_paragraph
+    @text = "But soft! What light through yonder window breaks?"
+
+    mail_with_defaults do |format|
+      format.html { render(inline: "<%= format_paragraph @text, 15, 1 %>") }
+    end
   end
 
-  def use_mail_helper(recipient)
-    recipients recipient
-    subject    "using mailing helpers"
-    from       "tester@example.com"
-    self.body = { :text => 
-      "But soft! What light through yonder window breaks? It is the east, " +
-      "and Juliet is the sun. Arise, fair sun, and kill the envious moon, " +
-      "which is sick and pale with grief that thou, her maid, art far more " +
-      "fair than she. Be not her maid, for she is envious! Her vestal " +
-      "livery is but sick and green, and none but fools do wear it. Cast " +
-      "it off!"
-    }
+  def use_format_paragraph_with_long_first_word
+    @text = "Antidisestablishmentarianism is very long."
+
+    mail_with_defaults do |format|
+      format.html { render(inline: "<%= format_paragraph @text, 10, 1 %>") }
+    end
   end
 
-  def use_helper_method(recipient)
-    recipients recipient
-    subject    "using helpers"
-    from       "tester@example.com"
-    self.body = { :text => "emphasize me!" }
+  def use_mailer
+    mail_with_defaults do |format|
+      format.html { render(inline: "<%= mailer.message.subject %>") }
+    end
+  end
+
+  def use_message
+    mail_with_defaults do |format|
+      format.html { render(inline: "<%= message.subject %>") }
+    end
+  end
+
+  def use_block_format
+    @text = <<-TEXT
+This is the
+first     paragraph.
+
+The second
+   paragraph.
+
+* item1 * item2
+  * item3
+    TEXT
+
+    mail_with_defaults do |format|
+      format.html { render(inline: "<%= block_format @text %>") }
+    end
+  end
+
+  def use_cache
+    mail_with_defaults do |format|
+      format.html { render(inline: "<% cache(:foo) do %>Greetings from a cache helper block<% end %>") }
+    end
   end
 
   private
-
-    def name_of_the_mailer_class
-      self.class.name
+    def mail_with_defaults(&block)
+      mail(to: "test@localhost", from: "tester@example.com",
+            subject: "using helpers", &block)
     end
-    helper_method :name_of_the_mailer_class
 end
 
-class MailerHelperTest < Test::Unit::TestCase
-  def new_mail( charset="utf-8" )
-    mail = TMail::Mail.new
-    mail.set_content_type "text", "plain", { "charset" => charset } if charset
-    mail
-  end
-
-  def setup
-    set_delivery_method :test
-    ActionMailer::Base.perform_deliveries = true
-    ActionMailer::Base.deliveries = []
-
-    @recipient = 'test@localhost'
-  end
-  
-  def teardown
-    restore_delivery_method
-  end
-  
-  def test_use_helper
-    mail = HelperMailer.create_use_helper(@recipient)
-    assert_match %r{Mr. Joe Person}, mail.encoded
-  end
-
-  def test_use_example_helper
-    mail = HelperMailer.create_use_example_helper(@recipient)
-    assert_match %r{<em><strong><small>emphasize me!}, mail.encoded
-  end
-
-  def test_use_helper_method
-    mail = HelperMailer.create_use_helper_method(@recipient)
-    assert_match %r{HelperMailer}, mail.encoded
-  end
-
+class MailerHelperTest < ActionMailer::TestCase
   def test_use_mail_helper
-    mail = HelperMailer.create_use_mail_helper(@recipient)
-    assert_match %r{  But soft!}, mail.encoded
-    assert_match %r{east, and\n  Juliet}, mail.encoded
+    mail = HelperMailer.use_mail_helper
+    assert_match %r{  But soft!}, mail.body.encoded
+    assert_match %r{east, and\r\n  Juliet}, mail.body.encoded
+  end
+
+  def test_use_mailer
+    mail = HelperMailer.use_mailer
+    assert_match "using helpers", mail.body.encoded
+  end
+
+  def test_use_message
+    mail = HelperMailer.use_message
+    assert_match "using helpers", mail.body.encoded
+  end
+
+  def test_use_format_paragraph
+    mail = HelperMailer.use_format_paragraph
+    assert_match " But soft! What\r\n light through\r\n yonder window\r\n breaks?", mail.body.encoded
+  end
+
+  def test_use_format_paragraph_with_long_first_word
+    mail = HelperMailer.use_format_paragraph_with_long_first_word
+    assert_equal " Antidisestablishmentarianism\r\n is very\r\n long.", mail.body.encoded
+  end
+
+  def test_use_block_format
+    mail = HelperMailer.use_block_format
+    expected = <<-TEXT
+  This is the first paragraph.
+
+  The second paragraph.
+
+  * item1
+  * item2
+  * item3
+    TEXT
+    assert_equal expected.gsub("\n", "\r\n"), mail.body.encoded
+  end
+
+  def test_use_cache
+    assert_nothing_raised do
+      mail = HelperMailer.use_cache
+      assert_equal "Greetings from a cache helper block", mail.body.encoded
+    end
   end
 end
-

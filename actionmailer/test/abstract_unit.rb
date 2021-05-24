@@ -1,58 +1,53 @@
-require 'test/unit'
+# frozen_string_literal: true
 
-$:.unshift "#{File.dirname(__FILE__)}/../lib"
-$:.unshift "#{File.dirname(__FILE__)}/../../activesupport/lib"
-$:.unshift "#{File.dirname(__FILE__)}/../../actionpack/lib"
-require 'action_mailer'
-require 'action_mailer/test_case'
+require "active_support/core_ext/kernel/reporting"
+
+# These are the normal settings that will be set up by Railties
+# TODO: Have these tests support other combinations of these values
+silence_warnings do
+  Encoding.default_internal = Encoding::UTF_8
+  Encoding.default_external = Encoding::UTF_8
+end
+
+module Rails
+  def self.root
+    File.expand_path("..", __dir__)
+  end
+end
+
+require "active_support/testing/autorun"
+require "active_support/testing/method_call_assertions"
+require "action_mailer"
+require "action_mailer/test_case"
+
+# Emulate AV railtie
+require "action_view"
+ActionMailer::Base.include(ActionView::Layouts)
 
 # Show backtraces for deprecated behavior for quicker cleanup.
 ActiveSupport::Deprecation.debug = true
 
-$:.unshift "#{File.dirname(__FILE__)}/fixtures/helpers"
-ActionMailer::Base.template_root = "#{File.dirname(__FILE__)}/fixtures"
+# Disable available locale checks to avoid warnings running the test suite.
+I18n.enforce_available_locales = false
 
-class MockSMTP
-  def self.deliveries
-    @@deliveries
-  end
+FIXTURE_LOAD_PATH = File.expand_path("fixtures", __dir__)
+ActionMailer::Base.view_paths = FIXTURE_LOAD_PATH
 
-  def initialize
-    @@deliveries = []
-  end
+ActionMailer::Base.delivery_job = ActionMailer::MailDeliveryJob
 
-  def sendmail(mail, from, to)
-    @@deliveries << [mail, from, to]
-  end
+class ActiveSupport::TestCase
+  include ActiveSupport::Testing::MethodCallAssertions
+
+  private
+    # Skips the current run on Rubinius using Minitest::Assertions#skip
+    def rubinius_skip(message = "")
+      skip message if RUBY_ENGINE == "rbx"
+    end
+
+    # Skips the current run on JRuby using Minitest::Assertions#skip
+    def jruby_skip(message = "")
+      skip message if defined?(JRUBY_VERSION)
+    end
 end
 
-class Net::SMTP
-  def self.start(*args)
-    yield MockSMTP.new
-  end
-end
-
-def uses_gem(gem_name, test_name, version = '> 0')
-  require 'rubygems'
-  gem gem_name.to_s, version
-  require gem_name.to_s
-  yield
-rescue LoadError
-  $stderr.puts "Skipping #{test_name} tests. `gem install #{gem_name}` and try again."
-end
-
-# Wrap tests that use Mocha and skip if unavailable.
-unless defined? uses_mocha
-  def uses_mocha(test_name, &block)
-    uses_gem('mocha', test_name, '>= 0.5.5', &block)
-  end
-end
-
-def set_delivery_method(delivery_method)
-  @old_delivery_method = ActionMailer::Base.delivery_method
-  ActionMailer::Base.delivery_method = delivery_method
-end
-
-def restore_delivery_method
-  ActionMailer::Base.delivery_method = @old_delivery_method
-end
+require_relative "../../tools/test_common"

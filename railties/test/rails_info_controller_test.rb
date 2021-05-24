@@ -1,52 +1,90 @@
-require 'abstract_unit'
-require 'action_controller'
-require 'action_controller/test_process'
+# frozen_string_literal: true
 
-module Rails; end
-require 'rails/info'
-require 'rails/info_controller'
+require "abstract_unit"
 
-class Rails::InfoController < ActionController::Base
-  @local_request = false
-  class << self
-    cattr_accessor :local_request
-  end
-  
-  # Re-raise errors caught by the controller.
-  def rescue_action(e) raise e end;
-  
-protected
-  def local_request?
-    self.class.local_request
+module ActionController
+  class Base
+    include ActionController::Testing
   end
 end
 
-ActionController::Routing::Routes.draw do |map|
-  map.connect ':controller/:action/:id'
-end
+class InfoControllerTest < ActionController::TestCase
+  tests Rails::InfoController
+  Rails.application.config.secret_key_base = "b3c631c314c0bbca50c1b2843150fe33"
 
-class Rails::InfoControllerTest < Test::Unit::TestCase
   def setup
-    @controller = Rails::InfoController.new
-    @request    = ActionController::TestRequest.new
-    @response   = ActionController::TestResponse.new
+    Rails.application.routes.draw do
+      get "/rails/info/properties" => "rails/info#properties"
+      get "/rails/info/routes"     => "rails/info#routes"
+    end
+    @routes = Rails.application.routes
 
-    ActionController::Base.consider_all_requests_local = true
+    Rails::InfoController.include(@routes.url_helpers)
+
+    @request.env["REMOTE_ADDR"] = "127.0.0.1"
   end
 
-  def test_rails_info_properties_table_rendered_for_local_request
-    Rails::InfoController.local_request = true
+  test "info controller does not allow remote requests" do
+    @request.env["REMOTE_ADDR"] = "example.org"
     get :properties
-    assert_tag :tag => 'table'
+    assert_response :forbidden
+  end
+
+  test "info controller renders an error message when request was forbidden" do
+    @request.env["REMOTE_ADDR"] = "example.org"
+    get :properties
+    assert_select "p"
+  end
+
+  test "info controller allows requests when all requests are considered local" do
+    get :properties
     assert_response :success
   end
-  
-  def test_rails_info_properties_error_rendered_for_non_local_request
-    Rails::InfoController.local_request = false
-    ActionController::Base.consider_all_requests_local = false
 
+  test "info controller allows local requests" do
     get :properties
-    assert_tag :tag => 'p'
-    assert_response 500
+    assert_response :success
+  end
+
+  test "info controller renders a table with properties" do
+    get :properties
+    assert_select "table"
+  end
+
+  test "info controller renders with routes" do
+    get :routes
+    assert_response :success
+  end
+
+  test "info controller returns exact matches" do
+    exact_count = -> { JSON(response.body)["exact"].size }
+
+    get :routes, params: { path: "rails/info/route" }
+    assert exact_count.call == 0, "should not match incomplete routes"
+
+    get :routes, params: { path: "rails/info/routes" }
+    assert exact_count.call == 1, "should match complete routes"
+
+    get :routes, params: { path: "rails/info/routes.html" }
+    assert exact_count.call == 1, "should match complete routes with optional parts"
+  end
+
+  test "info controller returns fuzzy matches" do
+    fuzzy_count = -> { JSON(response.body)["fuzzy"].size }
+
+    get :routes, params: { path: "rails/info" }
+    assert fuzzy_count.call == 2, "should match incomplete routes"
+
+    get :routes, params: { path: "rails/info/routes" }
+    assert fuzzy_count.call == 1, "should match complete routes"
+
+    get :routes, params: { path: "rails/info/routes.html" }
+    assert fuzzy_count.call == 0, "should match optional parts of route literally"
+  end
+
+  test "internal routes do not have a default params[:internal] value" do
+    get :properties
+    assert_response :success
+    assert_nil @controller.params[:internal]
   end
 end

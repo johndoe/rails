@@ -1,14 +1,10 @@
-%w(keys indifferent_access deep_merge reverse_merge conversions diff slice except).each do |ext|
-  require "active_support/core_ext/hash/#{ext}"
-end
+# frozen_string_literal: true
 
-class Hash #:nodoc:
-  include ActiveSupport::CoreExtensions::Hash::Keys
-  include ActiveSupport::CoreExtensions::Hash::IndifferentAccess
-  include ActiveSupport::CoreExtensions::Hash::DeepMerge
-  include ActiveSupport::CoreExtensions::Hash::ReverseMerge
-  include ActiveSupport::CoreExtensions::Hash::Conversions
-  include ActiveSupport::CoreExtensions::Hash::Diff
-  include ActiveSupport::CoreExtensions::Hash::Slice
-  include ActiveSupport::CoreExtensions::Hash::Except
-end
+require "active_support/core_ext/hash/conversions"
+require "active_support/core_ext/hash/deep_merge"
+require "active_support/core_ext/hash/deep_transform_values"
+require "active_support/core_ext/hash/except"
+require "active_support/core_ext/hash/indifferent_access"
+require "active_support/core_ext/hash/keys"
+require "active_support/core_ext/hash/reverse_merge"
+require "active_support/core_ext/hash/slice"

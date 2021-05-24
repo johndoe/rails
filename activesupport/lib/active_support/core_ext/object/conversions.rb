@@ -1,14 +1,6 @@
-class Object
-  # Alias of <tt>to_s</tt>.
-  def to_param
-    to_s
-  end
+# frozen_string_literal: true
 
-  # Converts an object into a string suitable for use as a URL query string, using the given <tt>key</tt> as the
-  # param name.
-  #
-  # Note: This method is defined as a default implementation for all Objects for Hash#to_query to work.
-  def to_query(key)
-    "#{CGI.escape(key.to_s)}=#{CGI.escape(to_param.to_s)}"
-  end
-end
+require "active_support/core_ext/object/to_param"
+require "active_support/core_ext/object/to_query"
+require "active_support/core_ext/array/conversions"
+require "active_support/core_ext/hash/conversions"

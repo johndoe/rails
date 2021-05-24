@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 class MixedCaseMonkey < ActiveRecord::Base
-  set_primary_key 'monkeyID'
+  belongs_to :human
 end

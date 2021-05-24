@@ -1,25 +1,24 @@
-require 'set'
+# frozen_string_literal: true
 
-module ActiveSupport #:nodoc:
-  module CoreExtensions #:nodoc:
-    module Hash #:nodoc:
-      # Return a hash that includes everything but the given keys. This is useful for
-      # limiting a set of parameters to everything but a few known toggles:
-      #
-      #   @person.update_attributes(params[:person].except(:admin))
-      module Except
-        # Returns a new hash without the given keys.
-        def except(*keys)
-          dup.except!(*keys)
-        end
+class Hash
+  # Returns a hash that includes everything except given keys.
+  #   hash = { a: true, b: false, c: nil }
+  #   hash.except(:c)     # => { a: true, b: false }
+  #   hash.except(:a, :b) # => { c: nil }
+  #   hash                # => { a: true, b: false, c: nil }
+  #
+  # This is useful for limiting a set of parameters to everything but a few known toggles:
+  #   @person.update(params[:person].except(:admin))
+  def except(*keys)
+    slice(*self.keys - keys)
+  end unless method_defined?(:except)
 
-        # Replaces the hash without the given keys.
-        def except!(*keys)
-          keys.map! { |key| convert_key(key) } if respond_to?(:convert_key)
-          keys.each { |key| delete(key) }
-          self
-        end
-      end
-    end
+  # Removes the given keys from hash and returns it.
+  #   hash = { a: true, b: false, c: nil }
+  #   hash.except!(:c) # => { a: true, b: false }
+  #   hash             # => { a: true, b: false }
+  def except!(*keys)
+    keys.each { |key| delete(key) }
+    self
   end
 end

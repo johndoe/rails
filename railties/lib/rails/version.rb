@@ -1,9 +1,10 @@
-module Rails
-  module VERSION #:nodoc:
-    MAJOR = 2
-    MINOR = 2
-    TINY  = 0
+# frozen_string_literal: true
 
-    STRING = [MAJOR, MINOR, TINY].join('.')
+require_relative "gem_version"
+
+module Rails
+  # Returns the version of the currently loaded Rails as a string.
+  def self.version
+    VERSION::STRING
   end
 end

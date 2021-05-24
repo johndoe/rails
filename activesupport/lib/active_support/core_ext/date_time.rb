@@ -1,12 +1,7 @@
-require 'date'
-require 'active_support/core_ext/time/behavior'
-require 'active_support/core_ext/time/zones'
-require 'active_support/core_ext/date_time/calculations'
-require 'active_support/core_ext/date_time/conversions'
+# frozen_string_literal: true
 
-class DateTime
-  include ActiveSupport::CoreExtensions::Time::Behavior
-  include ActiveSupport::CoreExtensions::Time::Zones
-  include ActiveSupport::CoreExtensions::DateTime::Calculations
-  include ActiveSupport::CoreExtensions::DateTime::Conversions
-end
+require "active_support/core_ext/date_time/acts_like"
+require "active_support/core_ext/date_time/blank"
+require "active_support/core_ext/date_time/calculations"
+require "active_support/core_ext/date_time/compatibility"
+require "active_support/core_ext/date_time/conversions"

@@ -1,80 +1,220 @@
+# frozen_string_literal: true
+
+require "set"
+require "thread"
+require "concurrent/map"
+require "pathname"
+require "active_support/core_ext/module/aliasing"
+require "active_support/core_ext/module/attribute_accessors"
+require "active_support/core_ext/module/introspection"
+require "active_support/core_ext/module/anonymous"
+require "active_support/core_ext/object/blank"
+require "active_support/core_ext/kernel/reporting"
+require "active_support/core_ext/load_error"
+require "active_support/core_ext/name_error"
+require "active_support/dependencies/interlock"
+require "active_support/inflector"
+
 module ActiveSupport #:nodoc:
   module Dependencies #:nodoc:
     extend self
 
-    # Should we turn on Ruby warnings on the first load of dependent files?
-    mattr_accessor :warnings_on_first_load
-    self.warnings_on_first_load = false
+    UNBOUND_METHOD_MODULE_NAME = Module.instance_method(:name)
+    private_constant :UNBOUND_METHOD_MODULE_NAME
+
+    mattr_accessor :interlock, default: Interlock.new
+
+    # :doc:
+
+    # Execute the supplied block without interference from any
+    # concurrent loads.
+    def self.run_interlock
+      Dependencies.interlock.running { yield }
+    end
+
+    # Execute the supplied block while holding an exclusive lock,
+    # preventing any other thread from being inside a #run_interlock
+    # block at the same time.
+    def self.load_interlock
+      Dependencies.interlock.loading { yield }
+    end
+
+    # Execute the supplied block while holding an exclusive lock,
+    # preventing any other thread from being inside a #run_interlock
+    # block at the same time.
+    def self.unload_interlock
+      Dependencies.interlock.unloading { yield }
+    end
+
+    # :nodoc:
 
     # All files ever loaded.
-    mattr_accessor :history
-    self.history = Set.new
+    mattr_accessor :history, default: Set.new
 
     # All files currently loaded.
-    mattr_accessor :loaded
-    self.loaded = Set.new
+    mattr_accessor :loaded, default: Set.new
+
+    # Stack of files being loaded.
+    mattr_accessor :loading, default: []
 
     # Should we load files or require them?
-    mattr_accessor :mechanism
-    self.mechanism = :load
+    mattr_accessor :mechanism, default: ENV["NO_RELOAD"] ? :require : :load
 
     # The set of directories from which we may automatically load files. Files
     # under these directories will be reloaded on each request in development mode,
-    # unless the directory also appears in load_once_paths.
-    mattr_accessor :load_paths
-    self.load_paths = []
+    # unless the directory also appears in autoload_once_paths.
+    mattr_accessor :autoload_paths, default: []
 
     # The set of directories from which automatically loaded constants are loaded
-    # only once. All directories in this set must also be present in +load_paths+.
-    mattr_accessor :load_once_paths
-    self.load_once_paths = []
+    # only once. All directories in this set must also be present in +autoload_paths+.
+    mattr_accessor :autoload_once_paths, default: []
 
-    # An array of qualified constant names that have been loaded. Adding a name to
-    # this array will cause it to be unloaded the next time Dependencies are cleared.
-    mattr_accessor :autoloaded_constants
-    self.autoloaded_constants = []
+    # This is a private set that collects all eager load paths during bootstrap.
+    # Useful for Zeitwerk integration. Its public interface is the config.* path
+    # accessors of each engine.
+    mattr_accessor :_eager_load_paths, default: Set.new
+
+    # An array of qualified constant names that have been loaded. Adding a name
+    # to this array will cause it to be unloaded the next time Dependencies are
+    # cleared.
+    mattr_accessor :autoloaded_constants, default: []
 
     # An array of constant names that need to be unloaded on every request. Used
     # to allow arbitrary constants to be marked for unloading.
-    mattr_accessor :explicitly_unloadable_constants
-    self.explicitly_unloadable_constants = []
+    mattr_accessor :explicitly_unloadable_constants, default: []
 
-    # The logger is used for generating information on the action run-time (including benchmarking) if available.
-    # Can be set to nil for no logging. Compatible with both Ruby's own Logger and Log4r loggers.
-    mattr_accessor :logger
+    # The WatchStack keeps a stack of the modules being watched as files are
+    # loaded. If a file in the process of being loaded (parent.rb) triggers the
+    # load of another file (child.rb) the stack will ensure that child.rb
+    # handles the new constants.
+    #
+    # If child.rb is being autoloaded, its constants will be added to
+    # autoloaded_constants. If it was being required, they will be discarded.
+    #
+    # This is handled by walking back up the watch stack and adding the constants
+    # found by child.rb to the list of original constants in parent.rb.
+    class WatchStack
+      include Enumerable
 
-    # Set to true to enable logging of const_missing and file loads
-    mattr_accessor :log_activity
-    self.log_activity = false
+      # @watching is a stack of lists of constants being watched. For instance,
+      # if parent.rb is autoloaded, the stack will look like [[Object]]. If
+      # parent.rb then requires namespace/child.rb, the stack will look like
+      # [[Object], [Namespace]].
+
+      attr_reader :watching
+
+      def initialize
+        @watching = []
+        @stack = Hash.new { |h, k| h[k] = [] }
+      end
+
+      def each(&block)
+        @stack.each(&block)
+      end
+
+      def watching?
+        !@watching.empty?
+      end
+
+      # Returns a list of new constants found since the last call to
+      # <tt>watch_namespaces</tt>.
+      def new_constants
+        constants = []
+
+        # Grab the list of namespaces that we're looking for new constants under
+        @watching.last.each do |namespace|
+          # Retrieve the constants that were present under the namespace when watch_namespaces
+          # was originally called
+          original_constants = @stack[namespace].last
+
+          mod = Inflector.constantize(namespace) if Dependencies.qualified_const_defined?(namespace)
+          next unless mod.is_a?(Module)
+
+          # Get a list of the constants that were added
+          new_constants = mod.constants(false) - original_constants
+
+          # @stack[namespace] returns an Array of the constants that are being evaluated
+          # for that namespace. For instance, if parent.rb requires child.rb, the first
+          # element of @stack[Object] will be an Array of the constants that were present
+          # before parent.rb was required. The second element will be an Array of the
+          # constants that were present before child.rb was required.
+          @stack[namespace].each do |namespace_constants|
+            namespace_constants.concat(new_constants)
+          end
+
+          # Normalize the list of new constants, and add them to the list we will return
+          new_constants.each do |suffix|
+            constants << ([namespace, suffix] - ["Object"]).join("::")
+          end
+        end
+        constants
+      ensure
+        # A call to new_constants is always called after a call to watch_namespaces
+        pop_modules(@watching.pop)
+      end
+
+      # Add a set of modules to the watch stack, remembering the initial
+      # constants.
+      def watch_namespaces(namespaces)
+        @watching << namespaces.map do |namespace|
+          module_name = Dependencies.to_constant_name(namespace)
+          original_constants = Dependencies.qualified_const_defined?(module_name) ?
+            Inflector.constantize(module_name).constants(false) : []
+
+          @stack[module_name] << original_constants
+          module_name
+        end
+      end
+
+      private
+        def pop_modules(modules)
+          modules.each { |mod| @stack[mod].pop }
+        end
+    end
 
     # An internal stack used to record which constants are loaded by any block.
-    mattr_accessor :constant_watch_stack
-    self.constant_watch_stack = []
+    mattr_accessor :constant_watch_stack, default: WatchStack.new
 
-    # Module includes this module
+    # Module includes this module.
     module ModuleConstMissing #:nodoc:
-      def self.included(base) #:nodoc:
+      def self.append_features(base)
         base.class_eval do
-          unless defined? const_missing_without_dependencies
-            alias_method_chain :const_missing, :dependencies
-          end
+          # Emulate #exclude via an ivar
+          return if defined?(@_const_missing) && @_const_missing
+          @_const_missing = instance_method(:const_missing)
+          remove_method(:const_missing)
+        end
+        super
+      end
+
+      def self.exclude_from(base)
+        base.class_eval do
+          define_method :const_missing, @_const_missing
+          @_const_missing = nil
         end
       end
 
-      def self.excluded(base) #:nodoc:
-        base.class_eval do
-          if defined? const_missing_without_dependencies
-            undef_method :const_missing
-            alias_method :const_missing, :const_missing_without_dependencies
-            undef_method :const_missing_without_dependencies
-          end
-        end
+      def self.include_into(base)
+        base.include(self)
+        append_features(base)
       end
 
-      # Use const_missing to autoload associations so we don't have to
-      # require_association when using single-table inheritance.
-      def const_missing_with_dependencies(class_id)
-        ActiveSupport::Dependencies.load_missing_constant self, class_id
+      def const_missing(const_name)
+        from_mod = anonymous? ? guess_for_anonymous(const_name) : self
+        Dependencies.load_missing_constant(from_mod, const_name)
+      end
+
+      # We assume that the name of the module reflects the nesting
+      # (unless it can be proven that is not the case) and the path to the file
+      # that defines the constant. Anonymous modules cannot follow these
+      # conventions and therefore we assume that the user wants to refer to a
+      # top-level constant.
+      def guess_for_anonymous(const_name)
+        if Object.const_defined?(const_name)
+          raise NameError.new "#{const_name} cannot be autoloaded from an anonymous class or module", const_name
+        else
+          Object
+        end
       end
 
       def unloadable(const_desc = self)
@@ -82,46 +222,27 @@ module ActiveSupport #:nodoc:
       end
     end
 
-    # Class includes this module
-    module ClassConstMissing #:nodoc:
-      def const_missing(const_name)
-        if [Object, Kernel].include?(self) || parent == self
-          super
-        else
-          begin
-            begin
-              Dependencies.load_missing_constant self, const_name
-            rescue NameError
-              parent.send :const_missing, const_name
-            end
-          rescue NameError => e
-            # Make sure that the name we are missing is the one that caused the error
-            parent_qualified_name = Dependencies.qualified_name_for parent, const_name
-            raise unless e.missing_name? parent_qualified_name
-            qualified_name = Dependencies.qualified_name_for self, const_name
-            raise NameError.new("uninitialized constant #{qualified_name}").copy_blame!(e)
-          end
-        end
-      end
-    end
-
-    # Object includes this module
+    # Object includes this module.
     module Loadable #:nodoc:
-      def self.included(base) #:nodoc:
+      def self.exclude_from(base)
         base.class_eval do
-          unless defined? load_without_new_constant_marking
-            alias_method_chain :load, :new_constant_marking
-          end
+          define_method(:load, Kernel.instance_method(:load))
+          private :load
+
+          define_method(:require, Kernel.instance_method(:require))
+          private :require
         end
       end
 
-      def self.excluded(base) #:nodoc:
-        base.class_eval do
-          if defined? load_without_new_constant_marking
-            undef_method :load
-            alias_method :load, :load_without_new_constant_marking
-            undef_method :load_without_new_constant_marking
-          end
+      def self.include_into(base)
+        base.include(self)
+
+        if base.instance_method(:load).owner == base
+          base.remove_method(:load)
+        end
+
+        if base.instance_method(:require).owner == base
+          base.remove_method(:require)
         end
       end
 
@@ -129,195 +250,184 @@ module ActiveSupport #:nodoc:
         Dependencies.require_or_load(file_name)
       end
 
-      def require_dependency(file_name)
-        Dependencies.depend_on(file_name)
+      # :doc:
+
+      # <b>Warning:</b> This method is obsolete in +:zeitwerk+ mode. In
+      # +:zeitwerk+ mode semantics match Ruby's and you do not need to be
+      # defensive with load order. Just refer to classes and modules normally.
+      # If the constant name is dynamic, camelize if needed, and constantize.
+      #
+      # In +:classic+ mode, interprets a file using +mechanism+ and marks its
+      # defined constants as autoloaded. +file_name+ can be either a string or
+      # respond to <tt>to_path</tt>.
+      #
+      # In +:classic+ mode, use this method in code that absolutely needs a
+      # certain constant to be defined at that point. A typical use case is to
+      # make constant name resolution deterministic for constants with the same
+      # relative name in different namespaces whose evaluation would depend on
+      # load order otherwise.
+      #
+      # Engines that do not control the mode in which their parent application
+      # runs should call +require_dependency+ where needed in case the runtime
+      # mode is +:classic+.
+      def require_dependency(file_name, message = "No such file to load -- %s.rb")
+        file_name = file_name.to_path if file_name.respond_to?(:to_path)
+        unless file_name.is_a?(String)
+          raise ArgumentError, "the file name must either be a String or implement #to_path -- you passed #{file_name.inspect}"
+        end
+
+        Dependencies.depend_on(file_name, message)
       end
 
-      def require_association(file_name)
-        Dependencies.associate_with(file_name)
+      # :nodoc:
+
+      def load_dependency(file)
+        if Dependencies.load? && Dependencies.constant_watch_stack.watching?
+          descs = Dependencies.constant_watch_stack.watching.flatten.uniq
+
+          Dependencies.new_constants_in(*descs) { yield }
+        else
+          yield
+        end
       end
 
-      def load_with_new_constant_marking(file, *extras) #:nodoc:
-        Dependencies.new_constants_in(Object) { load_without_new_constant_marking(file, *extras) }
-      rescue Exception => exception  # errors from loading file
-        exception.blame_file! file
-        raise
-      end
-
-      def require(file, *extras) #:nodoc:
-        Dependencies.new_constants_in(Object) { super }
-      rescue Exception => exception  # errors from required file
-        exception.blame_file! file
-        raise
-      end
-
-      # Mark the given constant as unloadable. Unloadable constants are removed each
-      # time dependencies are cleared.
+      # Mark the given constant as unloadable. Unloadable constants are removed
+      # each time dependencies are cleared.
       #
       # Note that marking a constant for unloading need only be done once. Setup
       # or init scripts may list each unloadable constant that may need unloading;
-      # each constant will be removed for every subsequent clear, as opposed to for
-      # the first clear.
+      # each constant will be removed for every subsequent clear, as opposed to
+      # for the first clear.
       #
       # The provided constant descriptor may be a (non-anonymous) module or class,
       # or a qualified constant name as a string or symbol.
       #
-      # Returns true if the constant was not previously marked for unloading, false
-      # otherwise.
+      # Returns +true+ if the constant was not previously marked for unloading,
+      # +false+ otherwise.
       def unloadable(const_desc)
         Dependencies.mark_for_unload const_desc
       end
-    end
 
-    # Exception file-blaming
-    module Blamable #:nodoc:
-      def blame_file!(file)
-        (@blamed_files ||= []).unshift file
-      end
+      private
+        def load(file, wrap = false)
+          result = false
+          load_dependency(file) { result = super }
+          result
+        end
 
-      def blamed_files
-        @blamed_files ||= []
-      end
-
-      def describe_blame
-        return nil if blamed_files.empty?
-        "This error occurred while loading the following files:\n   #{blamed_files.join "\n   "}"
-      end
-
-      def copy_blame!(exc)
-        @blamed_files = exc.blamed_files.clone
-        self
-      end
+        def require(file)
+          result = false
+          load_dependency(file) { result = super }
+          result
+        end
     end
 
     def hook!
-      Object.instance_eval { include Loadable }
-      Module.instance_eval { include ModuleConstMissing }
-      Class.instance_eval { include ClassConstMissing }
-      Exception.instance_eval { include Blamable }
-      true
+      Loadable.include_into(Object)
+      ModuleConstMissing.include_into(Module)
     end
 
     def unhook!
-      ModuleConstMissing.excluded(Module)
-      Loadable.excluded(Object)
-      true
+      ModuleConstMissing.exclude_from(Module)
+      Loadable.exclude_from(Object)
     end
 
     def load?
       mechanism == :load
     end
 
-    def depend_on(file_name, swallow_load_errors = false)
+    def depend_on(file_name, message = "No such file to load -- %s.rb")
       path = search_for_file(file_name)
       require_or_load(path || file_name)
-    rescue LoadError
-      raise unless swallow_load_errors
-    end
-
-    def associate_with(file_name)
-      depend_on(file_name, true)
+    rescue LoadError => load_error
+      if file_name = load_error.message[/ -- (.*?)(\.rb)?$/, 1]
+        load_error_message = if load_error.respond_to?(:original_message)
+          load_error.original_message
+        else
+          load_error.message
+        end
+        load_error_message.replace(message % file_name)
+      end
+      raise
     end
 
     def clear
-      log_call
-      loaded.clear
-      remove_unloadable_constants!
+      Dependencies.unload_interlock do
+        loaded.clear
+        loading.clear
+        remove_unloadable_constants!
+      end
     end
 
     def require_or_load(file_name, const_path = nil)
-      log_call file_name, const_path
-      file_name = $1 if file_name =~ /^(.*)\.rb$/
+      file_name = file_name.chomp(".rb")
       expanded = File.expand_path(file_name)
       return if loaded.include?(expanded)
 
-      # Record that we've seen this file *before* loading it to avoid an
-      # infinite loop with mutual dependencies.
-      loaded << expanded
+      Dependencies.load_interlock do
+        # Maybe it got loaded while we were waiting for our lock:
+        return if loaded.include?(expanded)
 
-      begin
-        if load?
-          log "loading #{file_name}"
+        # Record that we've seen this file *before* loading it to avoid an
+        # infinite loop with mutual dependencies.
+        loaded << expanded
+        loading << expanded
 
-          # Enable warnings iff this file has not been loaded before and
-          # warnings_on_first_load is set.
-          load_args = ["#{file_name}.rb"]
-          load_args << const_path unless const_path.nil?
+        begin
+          if load?
+            load_args = ["#{file_name}.rb"]
+            load_args << const_path unless const_path.nil?
 
-          if !warnings_on_first_load or history.include?(expanded)
             result = load_file(*load_args)
           else
-            enable_warnings { result = load_file(*load_args) }
+            result = require file_name
           end
-        else
-          log "requiring #{file_name}"
-          result = require file_name
+        rescue Exception
+          loaded.delete expanded
+          raise
+        ensure
+          loading.pop
         end
-      rescue Exception
-        loaded.delete expanded
-        raise
-      end
 
-      # Record history *after* loading so first load gets warnings.
-      history << expanded
-      return result
+        # Record history *after* loading so first load gets warnings.
+        history << expanded
+        result
+      end
     end
 
     # Is the provided constant path defined?
     def qualified_const_defined?(path)
-      raise NameError, "#{path.inspect} is not a valid constant name!" unless
-        /^(::)?([A-Z]\w*)(::[A-Z]\w*)*$/ =~ path
-
-      names = path.to_s.split('::')
-      names.shift if names.first.empty?
-
-      # We can't use defined? because it will invoke const_missing for the parent
-      # of the name we are checking.
-      names.inject(Object) do |mod, name|
-        return false unless uninherited_const_defined?(mod, name)
-        mod.const_get name
-      end
-      return true
+      Object.const_defined?(path, false)
     end
 
-    if Module.method(:const_defined?).arity == 1
-      # Does this module define this constant?
-      # Wrapper to accomodate changing Module#const_defined? in Ruby 1.9
-      def uninherited_const_defined?(mod, const)
-        mod.const_defined?(const)
-      end
-    else
-      def uninherited_const_defined?(mod, const) #:nodoc:
-        mod.const_defined?(const, false)
-      end
-    end
-
-    # Given +path+, a filesystem path to a ruby file, return an array of constant
-    # paths which would cause Dependencies to attempt to load this file.
-    def loadable_constants_for_path(path, bases = load_paths)
-      path = $1 if path =~ /\A(.*)\.rb\Z/
+    # Given +path+, a filesystem path to a ruby file, return an array of
+    # constant paths which would cause Dependencies to attempt to load this
+    # file.
+    def loadable_constants_for_path(path, bases = autoload_paths)
+      path = path.chomp(".rb")
       expanded_path = File.expand_path(path)
+      paths = []
 
-      bases.collect do |root|
+      bases.each do |root|
         expanded_root = File.expand_path(root)
-        next unless %r{\A#{Regexp.escape(expanded_root)}(/|\\)} =~ expanded_path
+        next unless expanded_path.start_with?(expanded_root)
 
-        nesting = expanded_path[(expanded_root.size)..-1]
-        nesting = nesting[1..-1] if nesting && nesting[0] == ?/
-        next if nesting.blank?
+        root_size = expanded_root.size
+        next if expanded_path[root_size] != ?/
 
-        [
-          nesting.camelize,
-          # Special case: application.rb might define ApplicationControlller.
-          ('ApplicationController' if nesting == 'application')
-        ]
-      end.flatten.compact.uniq
+        nesting = expanded_path[(root_size + 1)..-1]
+        paths << nesting.camelize unless nesting.blank?
+      end
+
+      paths.uniq!
+      paths
     end
 
-    # Search for a file in load_paths matching the provided suffix.
+    # Search for a file in autoload_paths matching the provided suffix.
     def search_for_file(path_suffix)
-      path_suffix = path_suffix + '.rb' unless path_suffix.ends_with? '.rb'
-      load_paths.each do |root|
+      path_suffix += ".rb" unless path_suffix.end_with?(".rb")
+
+      autoload_paths.each do |root|
         path = File.join(root, path_suffix)
         return path if File.file? path
       end
@@ -325,29 +435,33 @@ module ActiveSupport #:nodoc:
     end
 
     # Does the provided path_suffix correspond to an autoloadable module?
-    # Instead of returning a boolean, the autoload base for this module is returned.
+    # Instead of returning a boolean, the autoload base for this module is
+    # returned.
     def autoloadable_module?(path_suffix)
-      load_paths.each do |load_path|
+      autoload_paths.each do |load_path|
         return load_path if File.directory? File.join(load_path, path_suffix)
       end
       nil
     end
 
     def load_once_path?(path)
-      load_once_paths.any? { |base| path.starts_with? base }
+      # to_s works around a ruby issue where String#start_with?(Pathname)
+      # will raise a TypeError: no implicit conversion of Pathname into String
+      autoload_once_paths.any? { |base| path.start_with?(base.to_s) }
     end
 
     # Attempt to autoload the provided module name by searching for a directory
-    # matching the expect path suffix. If found, the module is created and assigned
-    # to +into+'s constants with the name +const_name+. Provided that the directory
-    # was loaded from a reloadable base path, it is added to the set of constants
-    # that are to be unloaded.
+    # matching the expected path suffix. If found, the module is created and
+    # assigned to +into+'s constants with the name +const_name+. Provided that
+    # the directory was loaded from a reloadable base path, it is added to the
+    # set of constants that are to be unloaded.
     def autoload_module!(into, const_name, qualified_name, path_suffix)
       return nil unless base_path = autoloadable_module?(path_suffix)
       mod = Module.new
       into.const_set const_name, mod
-      autoloaded_constants << qualified_name unless load_once_paths.include?(base_path)
-      return mod
+      autoloaded_constants << qualified_name unless autoload_once_paths.include?(base_path)
+      autoloaded_constants.uniq!
+      mod
     end
 
     # Load the file at the provided path. +const_paths+ is a set of qualified
@@ -355,98 +469,128 @@ module ActiveSupport #:nodoc:
     # addition of these constants. Each that is defined will be marked as
     # autoloaded, and will be removed when Dependencies.clear is next called.
     #
-    # If the second parameter is left off, then Dependencies will construct a set
-    # of names that the file at +path+ may define. See
+    # If the second parameter is left off, then Dependencies will construct a
+    # set of names that the file at +path+ may define. See
     # +loadable_constants_for_path+ for more details.
     def load_file(path, const_paths = loadable_constants_for_path(path))
-      log_call path, const_paths
       const_paths = [const_paths].compact unless const_paths.is_a? Array
-      parent_paths = const_paths.collect { |const_path| /(.*)::[^:]+\Z/ =~ const_path ? $1 : :Object }
+      parent_paths = const_paths.collect { |const_path| const_path[/.*(?=::)/] || ::Object }
 
       result = nil
       newly_defined_paths = new_constants_in(*parent_paths) do
-        result = load_without_new_constant_marking path
+        result = Kernel.load path
       end
 
       autoloaded_constants.concat newly_defined_paths unless load_once_path?(path)
       autoloaded_constants.uniq!
-      log "loading #{path} defined #{newly_defined_paths * ', '}" unless newly_defined_paths.empty?
-      return result
+      result
     end
 
-    # Return the constant path for the provided parent and constant name.
+    # Returns the constant path for the provided parent and constant name.
     def qualified_name_for(mod, name)
       mod_name = to_constant_name mod
-      (%w(Object Kernel).include? mod_name) ? name.to_s : "#{mod_name}::#{name}"
+      mod_name == "Object" ? name.to_s : "#{mod_name}::#{name}"
     end
 
     # Load the constant named +const_name+ which is missing from +from_mod+. If
-    # it is not possible to load the constant into from_mod, try its parent module
-    # using const_missing.
+    # it is not possible to load the constant into from_mod, try its parent
+    # module using +const_missing+.
     def load_missing_constant(from_mod, const_name)
-      log_call from_mod, const_name
-      if from_mod == Kernel
-        if ::Object.const_defined?(const_name)
-          log "Returning Object::#{const_name} for Kernel::#{const_name}"
-          return ::Object.const_get(const_name)
-        else
-          log "Substituting Object for Kernel"
-          from_mod = Object
-        end
-      end
-
-      # If we have an anonymous module, all we can do is attempt to load from Object.
-      from_mod = Object if from_mod.name.blank?
-
-      unless qualified_const_defined?(from_mod.name) && from_mod.name.constantize.object_id == from_mod.object_id
+      from_mod_name = real_mod_name(from_mod)
+      unless qualified_const_defined?(from_mod_name) && Inflector.constantize(from_mod_name).equal?(from_mod)
         raise ArgumentError, "A copy of #{from_mod} has been removed from the module tree but is still active!"
       end
 
-      raise ArgumentError, "#{from_mod} is not missing constant #{const_name}!" if uninherited_const_defined?(from_mod, const_name)
-
-      qualified_name = qualified_name_for from_mod, const_name
+      qualified_name = qualified_name_for(from_mod, const_name)
       path_suffix = qualified_name.underscore
-      name_error = NameError.new("uninitialized constant #{qualified_name}")
 
       file_path = search_for_file(path_suffix)
-      if file_path && ! loaded.include?(File.expand_path(file_path)) # We found a matching file to load
-        require_or_load file_path
-        raise LoadError, "Expected #{file_path} to define #{qualified_name}" unless uninherited_const_defined?(from_mod, const_name)
-        return from_mod.const_get(const_name)
+
+      if file_path
+        expanded = File.expand_path(file_path)
+        expanded.delete_suffix!(".rb")
+
+        if loading.include?(expanded)
+          raise "Circular dependency detected while autoloading constant #{qualified_name}"
+        else
+          require_or_load(expanded, qualified_name)
+
+          if from_mod.const_defined?(const_name, false)
+            return from_mod.const_get(const_name)
+          else
+            raise LoadError, "Unable to autoload constant #{qualified_name}, expected #{file_path} to define it"
+          end
+        end
       elsif mod = autoload_module!(from_mod, const_name, qualified_name, path_suffix)
         return mod
-      elsif (parent = from_mod.parent) && parent != from_mod &&
-            ! from_mod.parents.any? { |p| uninherited_const_defined?(p, const_name) }
+      elsif (parent = from_mod.module_parent) && parent != from_mod &&
+            ! from_mod.module_parents.any? { |p| p.const_defined?(const_name, false) }
         # If our parents do not have a constant named +const_name+ then we are free
         # to attempt to load upwards. If they do have such a constant, then this
         # const_missing must be due to from_mod::const_name, which should not
         # return constants from from_mod's parents.
         begin
+          # Since Ruby does not pass the nesting at the point the unknown
+          # constant triggered the callback we cannot fully emulate constant
+          # name lookup and need to make a trade-off: we are going to assume
+          # that the nesting in the body of Foo::Bar is [Foo::Bar, Foo] even
+          # though it might not be. Counterexamples are
+          #
+          #   class Foo::Bar
+          #     Module.nesting # => [Foo::Bar]
+          #   end
+          #
+          # or
+          #
+          #   module M::N
+          #     module S::T
+          #       Module.nesting # => [S::T, M::N]
+          #     end
+          #   end
+          #
+          # for example.
           return parent.const_missing(const_name)
         rescue NameError => e
           raise unless e.missing_name? qualified_name_for(parent, const_name)
-          raise name_error
         end
-      else
-        raise name_error
       end
+
+      name_error = uninitialized_constant(qualified_name, const_name, receiver: from_mod)
+      name_error.set_backtrace(caller.reject { |l| l.start_with? __FILE__ })
+      raise name_error
     end
 
     # Remove the constants that have been autoloaded, and those that have been
-    # marked for unloading.
+    # marked for unloading. Before each constant is removed a callback is sent
+    # to its class/module if it implements +before_remove_const+.
+    #
+    # The callback implementation should be restricted to cleaning up caches, etc.
+    # as the environment will be in an inconsistent state, e.g. other constants
+    # may have already been unloaded and not accessible.
     def remove_unloadable_constants!
       autoloaded_constants.each { |const| remove_constant const }
       autoloaded_constants.clear
       explicitly_unloadable_constants.each { |const| remove_constant const }
     end
 
+    # Get the reference for class named +name+.
+    # Raises an exception if referenced class does not exist.
+    def constantize(name)
+      Inflector.constantize(name)
+    end
+
+    # Get the reference for class named +name+ if one exists.
+    # Otherwise returns +nil+.
+    def safe_constantize(name)
+      Inflector.safe_constantize(name)
+    end
+
     # Determine if the given constant has been automatically loaded.
     def autoloaded?(desc)
-      # No name => anonymous module.
-      return false if desc.is_a?(Module) && desc.name.blank?
+      return false if desc.is_a?(Module) && real_mod_name(desc).nil?
       name = to_constant_name desc
-      return false unless qualified_const_defined? name
-      return autoloaded_constants.include?(name)
+      return false unless qualified_const_defined?(name)
+      autoloaded_constants.include?(name)
     end
 
     # Will the provided constant descriptor be unloaded?
@@ -460,10 +604,10 @@ module ActiveSupport #:nodoc:
     def mark_for_unload(const_desc)
       name = to_constant_name const_desc
       if explicitly_unloadable_constants.include? name
-        return false
+        false
       else
         explicitly_unloadable_constants << name
-        return true
+        true
       end
     end
 
@@ -476,130 +620,109 @@ module ActiveSupport #:nodoc:
     # exception, any new constants are regarded as being only partially defined
     # and will be removed immediately.
     def new_constants_in(*descs)
-      log_call(*descs)
+      constant_watch_stack.watch_namespaces(descs)
+      success = false
 
-      # Build the watch frames. Each frame is a tuple of
-      #   [module_name_as_string, constants_defined_elsewhere]
-      watch_frames = descs.collect do |desc|
-        if desc.is_a? Module
-          mod_name = desc.name
-          initial_constants = desc.local_constant_names
-        elsif desc.is_a?(String) || desc.is_a?(Symbol)
-          mod_name = desc.to_s
-
-          # Handle the case where the module has yet to be defined.
-          initial_constants = if qualified_const_defined?(mod_name)
-            mod_name.constantize.local_constant_names
-          else
-           []
-          end
-        else
-          raise Argument, "#{desc.inspect} does not describe a module!"
-        end
-
-        [mod_name, initial_constants]
-      end
-
-      constant_watch_stack.concat watch_frames
-
-      aborting = true
       begin
         yield # Now yield to the code that is to define new constants.
-        aborting = false
+        success = true
       ensure
-        # Find the new constants.
-        new_constants = watch_frames.collect do |mod_name, prior_constants|
-          # Module still doesn't exist? Treat it as if it has no constants.
-          next [] unless qualified_const_defined?(mod_name)
+        new_constants = constant_watch_stack.new_constants
 
-          mod = mod_name.constantize
-          next [] unless mod.is_a? Module
-          new_constants = mod.local_constant_names - prior_constants
+        return new_constants if success
 
-          # Make sure no other frames takes credit for these constants.
-          constant_watch_stack.each do |frame_name, constants|
-            constants.concat new_constants if frame_name == mod_name
-          end
-
-          new_constants.collect do |suffix|
-            mod_name == "Object" ? suffix : "#{mod_name}::#{suffix}"
-          end
-        end.flatten
-
-        log "New constants: #{new_constants * ', '}"
-
-        if aborting
-          log "Error during loading, removing partially loaded constants "
-          new_constants.each { |name| remove_constant name }
-          new_constants.clear
-        end
-      end
-
-      return new_constants
-    ensure
-      # Remove the stack frames that we added.
-      if defined?(watch_frames) && ! watch_frames.blank?
-        frame_ids = watch_frames.collect { |frame| frame.object_id }
-        constant_watch_stack.delete_if do |watch_frame|
-          frame_ids.include? watch_frame.object_id
-        end
-      end
-    end
-
-    class LoadingModule #:nodoc:
-      # Old style environment.rb referenced this method directly.  Please note, it doesn't
-      # actually *do* anything any more.
-      def self.root(*args)
-        if defined?(RAILS_DEFAULT_LOGGER)
-          RAILS_DEFAULT_LOGGER.warn "Your environment.rb uses the old syntax, it may not continue to work in future releases."
-          RAILS_DEFAULT_LOGGER.warn "For upgrade instructions please see: http://manuals.rubyonrails.com/read/book/19"
-        end
+        # Remove partially loaded constants.
+        new_constants.each { |c| remove_constant(c) }
       end
     end
 
     # Convert the provided const desc to a qualified constant name (as a string).
     # A module, class, symbol, or string may be provided.
     def to_constant_name(desc) #:nodoc:
-      name = case desc
-        when String then desc.starts_with?('::') ? desc[2..-1] : desc
-        when Symbol then desc.to_s
-        when Module
-          raise ArgumentError, "Anonymous modules have no name to be referenced by" if desc.name.blank?
-          desc.name
-        else raise TypeError, "Not a valid constant descriptor: #{desc.inspect}"
+      case desc
+      when String then desc.delete_prefix("::")
+      when Symbol then desc.to_s
+      when Module
+        real_mod_name(desc) ||
+          raise(ArgumentError, "Anonymous modules have no name to be referenced by")
+      else raise TypeError, "Not a valid constant descriptor: #{desc.inspect}"
       end
     end
 
     def remove_constant(const) #:nodoc:
-      return false unless qualified_const_defined? const
+      # Normalize ::Foo, ::Object::Foo, Object::Foo, Object::Object::Foo, etc. as Foo.
+      normalized = const.to_s.delete_prefix("::")
+      normalized.sub!(/\A(Object::)+/, "")
 
-      const = $1 if /\A::(.*)\Z/ =~ const.to_s
-      names = const.to_s.split('::')
-      if names.size == 1 # It's under Object
+      constants = normalized.split("::")
+      to_remove = constants.pop
+
+      # Remove the file path from the loaded list.
+      file_path = search_for_file(const.underscore)
+      if file_path
+        expanded = File.expand_path(file_path)
+        expanded.delete_suffix!(".rb")
+        loaded.delete(expanded)
+      end
+
+      if constants.empty?
         parent = Object
       else
-        parent = (names[0..-2] * '::').constantize
+        # This method is robust to non-reachable constants.
+        #
+        # Non-reachable constants may be passed if some of the parents were
+        # autoloaded and already removed. It is easier to do a sanity check
+        # here than require the caller to be clever. We check the parent
+        # rather than the very const argument because we do not want to
+        # trigger Kernel#autoloads, see the comment below.
+        parent_name = constants.join("::")
+        return unless qualified_const_defined?(parent_name)
+        parent = constantize(parent_name)
       end
 
-      log "removing constant #{const}"
-      parent.instance_eval { remove_const names.last }
-      return true
+      # In an autoloaded user.rb like this
+      #
+      #   autoload :Foo, 'foo'
+      #
+      #   class User < ActiveRecord::Base
+      #   end
+      #
+      # we correctly register "Foo" as being autoloaded. But if the app does
+      # not use the "Foo" constant we need to be careful not to trigger
+      # loading "foo.rb" ourselves. While #const_defined? and #const_get? do
+      # require the file, #autoload? and #remove_const don't.
+      #
+      # We are going to remove the constant nonetheless ---which exists as
+      # far as Ruby is concerned--- because if the user removes the macro
+      # call from a class or module that were not autoloaded, as in the
+      # example above with Object, accessing to that constant must err.
+      unless parent.autoload?(to_remove)
+        begin
+          constantized = parent.const_get(to_remove, false)
+        rescue NameError
+          # The constant is no longer reachable, just skip it.
+          return
+        else
+          constantized.before_remove_const if constantized.respond_to?(:before_remove_const)
+        end
+      end
+
+      begin
+        parent.instance_eval { remove_const to_remove }
+      rescue NameError
+        # The constant is no longer reachable, just skip it.
+      end
     end
 
-    protected
-      def log_call(*args)
-        if logger && log_activity
-          arg_str = args.collect { |arg| arg.inspect } * ', '
-          /in `([a-z_\?\!]+)'/ =~ caller(1).first
-          selector = $1 || '<unknown>'
-          log "called #{selector}(#{arg_str})"
-        end
+    private
+      def uninitialized_constant(qualified_name, const_name, receiver:)
+        NameError.new("uninitialized constant #{qualified_name}", const_name, receiver: receiver)
       end
 
-      def log(msg)
-        if logger && log_activity
-          logger.debug "Dependencies: #{msg}"
-        end
+      # Returns the original name of a class or module even if `name` has been
+      # overridden.
+      def real_mod_name(mod)
+        UNBOUND_METHOD_MODULE_NAME.bind_call(mod)
       end
   end
 end

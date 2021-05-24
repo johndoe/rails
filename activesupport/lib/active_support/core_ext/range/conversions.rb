@@ -1,27 +1,41 @@
-module ActiveSupport #:nodoc:
-  module CoreExtensions #:nodoc:
-    module Range #:nodoc:
-      # Getting ranges in different convenient string representations and other objects
-      module Conversions
-        RANGE_FORMATS = {
-          :db => Proc.new { |start, stop| "BETWEEN '#{start.to_s(:db)}' AND '#{stop.to_s(:db)}'" }
-        }
+# frozen_string_literal: true
 
-        def self.included(base) #:nodoc:
-          base.class_eval do
-            alias_method :to_default_s, :to_s
-            alias_method :to_s, :to_formatted_s
-          end
-        end
-        # Gives a human readable format of the range.
-        #
-        # ==== Example: 
-        # 
-        #   [1..100].to_formatted_s # => "1..100"
-        def to_formatted_s(format = :default)
-          RANGE_FORMATS[format] ? RANGE_FORMATS[format].call(first, last) : to_default_s
+module ActiveSupport
+  module RangeWithFormat
+    RANGE_FORMATS = {
+      db: -> (start, stop) do
+        case start
+        when String then "BETWEEN '#{start}' AND '#{stop}'"
+        else
+          "BETWEEN '#{start.to_s(:db)}' AND '#{stop.to_s(:db)}'"
         end
       end
+    }
+
+    # Convert range to a formatted string. See RANGE_FORMATS for predefined formats.
+    #
+    #   range = (1..100)           # => 1..100
+    #
+    #   range.to_s                 # => "1..100"
+    #   range.to_s(:db)            # => "BETWEEN '1' AND '100'"
+    #
+    # == Adding your own range formats to to_s
+    # You can add your own formats to the Range::RANGE_FORMATS hash.
+    # Use the format name as the hash key and a Proc instance.
+    #
+    #   # config/initializers/range_formats.rb
+    #   Range::RANGE_FORMATS[:short] = ->(start, stop) { "Between #{start.to_s(:db)} and #{stop.to_s(:db)}" }
+    def to_s(format = :default)
+      if formatter = RANGE_FORMATS[format]
+        formatter.call(first, last)
+      else
+        super()
+      end
     end
+
+    alias_method :to_default_s, :to_s
+    alias_method :to_formatted_s, :to_s
   end
 end
+
+Range.prepend(ActiveSupport::RangeWithFormat)

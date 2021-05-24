@@ -1,37 +1,32 @@
-require 'abstract_unit'
+# frozen_string_literal: true
 
-class IntegerExtTest < Test::Unit::TestCase
-  def test_even
-    assert [ -2, 0, 2, 4 ].all? { |i| i.even? }
-    assert ![ -1, 1, 3 ].all? { |i| i.even? }
+require_relative "../abstract_unit"
+require "active_support/core_ext/integer"
 
-    assert 22953686867719691230002707821868552601124472329079.odd?
-    assert !22953686867719691230002707821868552601124472329079.even?
-    assert 22953686867719691230002707821868552601124472329080.even?
-    assert !22953686867719691230002707821868552601124472329080.odd?
-  end
-
-  def test_odd
-    assert ![ -2, 0, 2, 4 ].all? { |i| i.odd? }
-    assert [ -1, 1, 3 ].all? { |i| i.odd? }
-    assert 1000000000000000000000000000000000000000000000000000000001.odd?
-  end
+class IntegerExtTest < ActiveSupport::TestCase
+  PRIME = 22953686867719691230002707821868552601124472329079
 
   def test_multiple_of
     [ -7, 0, 7, 14 ].each { |i| assert i.multiple_of?(7) }
-    [ -7, 7, 14 ].each { |i| assert ! i.multiple_of?(6) }
+    [ -7, 7, 14 ].each { |i| assert_not i.multiple_of?(6) }
+
+    # test the 0 edge case
+    assert 0.multiple_of?(0)
+    assert_not 5.multiple_of?(0)
+
     # test with a prime
-    assert !22953686867719691230002707821868552601124472329079.multiple_of?(2)
-    assert !22953686867719691230002707821868552601124472329079.multiple_of?(3)
-    assert !22953686867719691230002707821868552601124472329079.multiple_of?(5)
-    assert !22953686867719691230002707821868552601124472329079.multiple_of?(7)
+    [2, 3, 5, 7].each { |i| assert_not PRIME.multiple_of?(i) }
   end
 
   def test_ordinalize
-    # These tests are mostly just to ensure that the ordinalize method exists
-    # It's results are tested comprehensively in the inflector test cases.
-    assert_equal '1st', 1.ordinalize
-    assert_equal '8th', 8.ordinalize
-    1000000000000000000000000000000000000000000000000000000000000000000000.ordinalize
+    # These tests are mostly just to ensure that the ordinalize method exists.
+    # Its results are tested comprehensively in the inflector test cases.
+    assert_equal "1st", 1.ordinalize
+    assert_equal "8th", 8.ordinalize
+  end
+
+  def test_ordinal
+    assert_equal "st", 1.ordinal
+    assert_equal "th", 8.ordinal
   end
 end

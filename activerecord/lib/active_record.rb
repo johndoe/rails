@@ -1,5 +1,7 @@
+# frozen_string_literal: true
+
 #--
-# Copyright (c) 2004-2008 David Heinemeier Hansson
+# Copyright (c) 2004-2021 David Heinemeier Hansson
 #
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files (the
@@ -21,61 +23,172 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #++
 
-begin
-  require 'active_support'
-rescue LoadError
-  activesupport_path = "#{File.dirname(__FILE__)}/../../activesupport/lib"
-  if File.directory?(activesupport_path)
-    $:.unshift activesupport_path
-    require 'active_support'
+require "active_support"
+require "active_support/rails"
+require "active_model"
+require "arel"
+require "yaml"
+
+require "active_record/version"
+require "active_model/attribute_set"
+require "active_record/errors"
+
+module ActiveRecord
+  extend ActiveSupport::Autoload
+
+  autoload :Base
+  autoload :Callbacks
+  autoload :Core
+  autoload :ConnectionHandling
+  autoload :CounterCache
+  autoload :DynamicMatchers
+  autoload :DelegatedType
+  autoload :Encryption
+  autoload :Enum
+  autoload :InternalMetadata
+  autoload :Explain
+  autoload :Inheritance
+  autoload :Integration
+  autoload :Migration
+  autoload :Migrator, "active_record/migration"
+  autoload :ModelSchema
+  autoload :NestedAttributes
+  autoload :NoTouching
+  autoload :TouchLater
+  autoload :Persistence
+  autoload :QueryCache
+  autoload :Querying
+  autoload :ReadonlyAttributes
+  autoload :RecordInvalid, "active_record/validations"
+  autoload :Reflection
+  autoload :RuntimeRegistry
+  autoload :Sanitization
+  autoload :Schema
+  autoload :SchemaDumper
+  autoload :SchemaMigration
+  autoload :Scoping
+  autoload :Serialization
+  autoload :Store
+  autoload :SignedId
+  autoload :Suppressor
+  autoload :Timestamp
+  autoload :Transactions
+  autoload :Translation
+  autoload :Validations
+  autoload :SecureToken
+  autoload :DestroyAssociationAsyncJob
+
+  eager_autoload do
+    autoload :StatementCache
+    autoload :ConnectionAdapters
+
+    autoload :Aggregations
+    autoload :Associations
+    autoload :AttributeAssignment
+    autoload :AttributeMethods
+    autoload :AutosaveAssociation
+    autoload :AsynchronousQueriesTracker
+
+    autoload :LegacyYamlAdapter
+
+    autoload :Relation
+    autoload :AssociationRelation
+    autoload :DisableJoinsAssociationRelation
+    autoload :NullRelation
+
+    autoload_under "relation" do
+      autoload :QueryMethods
+      autoload :FinderMethods
+      autoload :Calculations
+      autoload :PredicateBuilder
+      autoload :SpawnMethods
+      autoload :Batches
+      autoload :Delegation
+    end
+
+    autoload :Result
+    autoload :FutureResult
+    autoload :TableMetadata
+    autoload :Type
+  end
+
+  module Coders
+    autoload :YAMLColumn, "active_record/coders/yaml_column"
+    autoload :JSON, "active_record/coders/json"
+  end
+
+  module AttributeMethods
+    extend ActiveSupport::Autoload
+
+    eager_autoload do
+      autoload :BeforeTypeCast
+      autoload :Dirty
+      autoload :PrimaryKey
+      autoload :Query
+      autoload :Read
+      autoload :TimeZoneConversion
+      autoload :Write
+      autoload :Serialization
+    end
+  end
+
+  module Locking
+    extend ActiveSupport::Autoload
+
+    eager_autoload do
+      autoload :Optimistic
+      autoload :Pessimistic
+    end
+  end
+
+  module Scoping
+    extend ActiveSupport::Autoload
+
+    eager_autoload do
+      autoload :Named
+      autoload :Default
+    end
+  end
+
+  module Middleware
+    extend ActiveSupport::Autoload
+
+    autoload :DatabaseSelector, "active_record/middleware/database_selector"
+  end
+
+  module Tasks
+    extend ActiveSupport::Autoload
+
+    autoload :DatabaseTasks
+    autoload :SQLiteDatabaseTasks, "active_record/tasks/sqlite_database_tasks"
+    autoload :MySQLDatabaseTasks,  "active_record/tasks/mysql_database_tasks"
+    autoload :PostgreSQLDatabaseTasks,
+      "active_record/tasks/postgresql_database_tasks"
+  end
+
+  autoload :TestDatabases, "active_record/test_databases"
+  autoload :TestFixtures, "active_record/fixtures"
+
+  def self.eager_load!
+    super
+    ActiveRecord::Locking.eager_load!
+    ActiveRecord::Scoping.eager_load!
+    ActiveRecord::Associations.eager_load!
+    ActiveRecord::AttributeMethods.eager_load!
+    ActiveRecord::ConnectionAdapters.eager_load!
+    ActiveRecord::Encryption.eager_load!
   end
 end
 
-require 'active_record/base'
-require 'active_record/named_scope'
-require 'active_record/observer'
-require 'active_record/query_cache'
-require 'active_record/validations'
-require 'active_record/callbacks'
-require 'active_record/reflection'
-require 'active_record/associations'
-require 'active_record/association_preload'
-require 'active_record/aggregations'
-require 'active_record/transactions'
-require 'active_record/timestamp'
-require 'active_record/locking/optimistic'
-require 'active_record/locking/pessimistic'
-require 'active_record/migration'
-require 'active_record/schema'
-require 'active_record/calculations'
-require 'active_record/serialization'
-require 'active_record/attribute_methods'
-require 'active_record/dirty'
-require 'active_record/dynamic_finder_match'
-
-ActiveRecord::Base.class_eval do
-  extend ActiveRecord::QueryCache
-  include ActiveRecord::Validations
-  include ActiveRecord::Locking::Optimistic
-  include ActiveRecord::Locking::Pessimistic
-  include ActiveRecord::AttributeMethods
-  include ActiveRecord::Dirty
-  include ActiveRecord::Callbacks
-  include ActiveRecord::Observing
-  include ActiveRecord::Timestamp
-  include ActiveRecord::Associations
-  include ActiveRecord::NamedScope
-  include ActiveRecord::AssociationPreload
-  include ActiveRecord::Aggregations
-  include ActiveRecord::Transactions
-  include ActiveRecord::Reflection
-  include ActiveRecord::Calculations
-  include ActiveRecord::Serialization
+ActiveSupport.on_load(:active_record) do
+  Arel::Table.engine = self
 end
 
-require 'active_record/connection_adapters/abstract_adapter'
+ActiveSupport.on_load(:i18n) do
+  I18n.load_path << File.expand_path("active_record/locale/en.yml", __dir__)
+end
 
-require 'active_record/schema_dumper'
-
-require 'active_record/i18n_interpolation_deprecation'
-I18n.load_path << File.dirname(__FILE__) + '/active_record/locale/en-US.yml'
+YAML.load_tags["!ruby/object:ActiveRecord::AttributeSet"] = "ActiveModel::AttributeSet"
+YAML.load_tags["!ruby/object:ActiveRecord::Attribute::FromDatabase"] = "ActiveModel::Attribute::FromDatabase"
+YAML.load_tags["!ruby/object:ActiveRecord::LazyAttributeHash"] = "ActiveModel::LazyAttributeHash"
+YAML.load_tags["!ruby/object:ActiveRecord::ConnectionAdapters::AbstractMysqlAdapter::MysqlString"] = "ActiveRecord::Type::String"

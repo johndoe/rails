@@ -1,0 +1,10 @@
+<p id="notice"><%%= notice %></p>
+
+<%%= render @<%= singular_table_name %> %>
+
+<div>
+  <%%= link_to "Edit this <%= human_name.downcase %>", edit_<%= singular_table_name %>_path(@<%= singular_table_name %>) %> |
+  <%%= link_to "Back to <%= human_name.pluralize.downcase %>", <%= index_helper %>_path %>
+
+  <%%= button_to "Destroy this <%= human_name.downcase %>", <%= singular_table_name %>_path(@<%= singular_table_name %>), method: :delete %>
+</div>

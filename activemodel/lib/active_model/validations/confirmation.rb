@@ -1,43 +1,79 @@
+# frozen_string_literal: true
+
 module ActiveModel
   module Validations
-    module ClassMethods
-      # Encapsulates the pattern of wanting to validate a password or email address field with a confirmation. Example:
+    class ConfirmationValidator < EachValidator # :nodoc:
+      def initialize(options)
+        super({ case_sensitive: true }.merge!(options))
+        setup!(options[:class])
+      end
+
+      def validate_each(record, attribute, value)
+        unless (confirmed = record.public_send("#{attribute}_confirmation")).nil?
+          unless confirmation_value_equal?(record, attribute, value, confirmed)
+            human_attribute_name = record.class.human_attribute_name(attribute)
+            record.errors.add(:"#{attribute}_confirmation", :confirmation, **options.except(:case_sensitive).merge!(attribute: human_attribute_name))
+          end
+        end
+      end
+
+      private
+        def setup!(klass)
+          klass.attr_reader(*attributes.filter_map do |attribute|
+            :"#{attribute}_confirmation" unless klass.method_defined?(:"#{attribute}_confirmation")
+          end)
+
+          klass.attr_writer(*attributes.filter_map do |attribute|
+            :"#{attribute}_confirmation" unless klass.method_defined?(:"#{attribute}_confirmation=")
+          end)
+        end
+
+        def confirmation_value_equal?(record, attribute, value, confirmed)
+          if !options[:case_sensitive] && value.is_a?(String)
+            value.casecmp(confirmed) == 0
+          else
+            value == confirmed
+          end
+        end
+    end
+
+    module HelperMethods
+      # Encapsulates the pattern of wanting to validate a password or email
+      # address field with a confirmation.
       #
       #   Model:
       #     class Person < ActiveRecord::Base
       #       validates_confirmation_of :user_name, :password
-      #       validates_confirmation_of :email_address, :message => "should match confirmation"
+      #       validates_confirmation_of :email_address,
+      #                                 message: 'should match confirmation'
       #     end
       #
       #   View:
       #     <%= password_field "person", "password" %>
       #     <%= password_field "person", "password_confirmation" %>
       #
-      # The added +password_confirmation+ attribute is virtual; it exists only as an in-memory attribute for validating the password.
-      # To achieve this, the validation adds accessors to the model for the confirmation attribute. NOTE: This check is performed
-      # only if +password_confirmation+ is not +nil+, and by default only on save. To require confirmation, make sure to add a presence
-      # check for the confirmation attribute:
+      # The added +password_confirmation+ attribute is virtual; it exists only
+      # as an in-memory attribute for validating the password. To achieve this,
+      # the validation adds accessors to the model for the confirmation
+      # attribute.
       #
-      #   validates_presence_of :password_confirmation, :if => :password_changed?
+      # NOTE: This check is performed only if +password_confirmation+ is not
+      # +nil+. To require confirmation, make sure to add a presence check for
+      # the confirmation attribute:
+      #
+      #   validates_presence_of :password_confirmation, if: :password_changed?
       #
       # Configuration options:
-      # * <tt>:message</tt> - A custom error message (default is: "doesn't match confirmation")
-      # * <tt>:on</tt> - Specifies when this validation is active (default is <tt>:save</tt>, other options <tt>:create</tt>, <tt>:update</tt>)
-      # * <tt>:if</tt> - Specifies a method, proc or string to call to determine if the validation should
-      #   occur (e.g. <tt>:if => :allow_validation</tt>, or <tt>:if => Proc.new { |user| user.signup_step > 2 }</tt>).  The
-      #   method, proc or string should return or evaluate to a true or false value.
-      # * <tt>:unless</tt> - Specifies a method, proc or string to call to determine if the validation should
-      #   not occur (e.g. <tt>:unless => :skip_validation</tt>, or <tt>:unless => Proc.new { |user| user.signup_step <= 2 }</tt>).  The
-      #   method, proc or string should return or evaluate to a true or false value.
+      # * <tt>:message</tt> - A custom error message (default is: "doesn't match
+      #   <tt>%{translated_attribute_name}</tt>").
+      # * <tt>:case_sensitive</tt> - Looks for an exact match. Ignored by
+      #   non-text columns (+true+ by default).
+      #
+      # There is also a list of default options supported by every validator:
+      # +:if+, +:unless+, +:on+, +:allow_nil+, +:allow_blank+, and +:strict+.
+      # See <tt>ActiveModel::Validations#validates</tt> for more information
       def validates_confirmation_of(*attr_names)
-        configuration = { :message => ActiveRecord::Errors.default_error_messages[:confirmation], :on => :save }
-        configuration.update(attr_names.extract_options!)
-
-        attr_accessor(*(attr_names.map { |n| "#{n}_confirmation" }))
-
-        validates_each(attr_names, configuration) do |record, attr_name, value|
-          record.errors.add(attr_name, configuration[:message]) unless record.send("#{attr_name}_confirmation").nil? or value == record.send("#{attr_name}_confirmation")
-        end
+        validates_with ConfirmationValidator, _merge_attributes(attr_names)
       end
     end
   end

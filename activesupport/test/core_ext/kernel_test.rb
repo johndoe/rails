@@ -1,6 +1,9 @@
-require 'abstract_unit'
+# frozen_string_literal: true
 
-class KernelTest < Test::Unit::TestCase
+require_relative "../abstract_unit"
+require "active_support/core_ext/kernel"
+
+class KernelTest < ActiveSupport::TestCase
   def test_silence_warnings
     silence_warnings { assert_nil $VERBOSE }
     assert_equal 1234, silence_warnings { 1234 }
@@ -13,7 +16,6 @@ class KernelTest < Test::Unit::TestCase
   rescue
     assert_equal old_verbose, $VERBOSE
   end
-
 
   def test_enable_warnings
     enable_warnings { assert_equal true, $VERBOSE }
@@ -28,16 +30,24 @@ class KernelTest < Test::Unit::TestCase
     assert_equal old_verbose, $VERBOSE
   end
 
+  def test_class_eval
+    o = Object.new
+    class << o; @x = 1; end
+    assert_equal 1, o.class_eval { @x }
+  end
+end
 
-  def test_silence_stderr
-    old_stderr_position = STDERR.tell
-    silence_stderr { STDERR.puts 'hello world' }
-    assert_equal old_stderr_position, STDERR.tell
-  rescue Errno::ESPIPE
-    # Skip if we can't STDERR.tell
+class KernelSuppressTest < ActiveSupport::TestCase
+  def test_reraise
+    assert_raise(LoadError) do
+      suppress(ArgumentError) { raise LoadError }
+    end
   end
 
-  def test_silence_stderr_with_return_value
-    assert_equal 1, silence_stderr { 1 }
+  def test_suppression
+    suppress(ArgumentError) { raise ArgumentError }
+    suppress(LoadError) { raise LoadError }
+    suppress(LoadError, ArgumentError) { raise LoadError }
+    suppress(LoadError, ArgumentError) { raise ArgumentError }
   end
 end

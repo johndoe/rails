@@ -1,58 +1,50 @@
-# OrderedHash is namespaced to prevent conflicts with other implementations
+# frozen_string_literal: true
+
+require "yaml"
+
+YAML.add_builtin_type("omap") do |type, val|
+  ActiveSupport::OrderedHash[val.map { |v| v.to_a.first }]
+end
+
 module ActiveSupport
-  # Hash is ordered in Ruby 1.9!
-  if RUBY_VERSION >= '1.9'
-    OrderedHash = ::Hash
-  else
-    class OrderedHash < Array #:nodoc:
-      def []=(key, value)
-        if pair = assoc(key)
-          pair.pop
-          pair << value
-        else
-          self << [key, value]
-        end
-        value
-      end
+  # DEPRECATED: <tt>ActiveSupport::OrderedHash</tt> implements a hash that preserves
+  # insertion order.
+  #
+  #   oh = ActiveSupport::OrderedHash.new
+  #   oh[:a] = 1
+  #   oh[:b] = 2
+  #   oh.keys # => [:a, :b], this order is guaranteed
+  #
+  # Also, maps the +omap+ feature for YAML files
+  # (See https://yaml.org/type/omap.html) to support ordered items
+  # when loading from yaml.
+  #
+  # <tt>ActiveSupport::OrderedHash</tt> is namespaced to prevent conflicts
+  # with other implementations.
+  class OrderedHash < ::Hash # :nodoc:
+    def to_yaml_type
+      "!tag:yaml.org,2002:omap"
+    end
 
-      def [](key)
-        pair = assoc(key)
-        pair ? pair.last : nil
-      end
+    def encode_with(coder)
+      coder.represent_seq "!omap", map { |k, v| { k => v } }
+    end
 
-      def delete(key)
-        pair = assoc(key)
-        pair ? array_index = index(pair) : nil
-        array_index ? delete_at(array_index).last : nil
-      end
+    def select(*args, &block)
+      dup.tap { |hash| hash.select!(*args, &block) }
+    end
 
-      def keys
-        collect { |key, value| key }
-      end
+    def reject(*args, &block)
+      dup.tap { |hash| hash.reject!(*args, &block) }
+    end
 
-      def values
-        collect { |key, value| value }
-      end
+    def nested_under_indifferent_access
+      self
+    end
 
-      def to_hash
-        returning({}) do |hash|
-          each { |array| hash[array[0]] = array[1] }
-        end
-      end
-
-      def has_key?(k)
-        !assoc(k).nil?
-      end
-
-      alias_method :key?, :has_key?
-      alias_method :include?, :has_key?
-      alias_method :member?, :has_key?
-
-      def has_value?(v)
-        any? { |key, value| value == v }
-      end
-
-      alias_method :value?, :has_value?
+    # Returns true to make sure that this hash is extractable via <tt>Array#extract_options!</tt>
+    def extractable_options?
+      true
     end
   end
 end

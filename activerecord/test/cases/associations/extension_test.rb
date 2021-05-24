@@ -1,9 +1,12 @@
+# frozen_string_literal: true
+
 require "cases/helper"
-require 'models/post'
-require 'models/comment'
-require 'models/project'
-require 'models/developer'
-require 'models/company_in_module'
+require "models/post"
+require "models/comment"
+require "models/project"
+require "models/developer"
+require "models/computer"
+require "models/company_in_module"
 
 class AssociationsExtensionsTest < ActiveRecord::TestCase
   fixtures :projects, :developers, :developers_projects, :comments, :posts
@@ -30,33 +33,61 @@ class AssociationsExtensionsTest < ActiveRecord::TestCase
     assert_equal projects(:active_record), developers(:david).projects_extended_by_name_and_block.find_least_recent
   end
 
+  def test_extension_with_scopes
+    assert_equal comments(:greetings), posts(:welcome).comments.offset(1).find_most_recent
+    assert_equal comments(:greetings), posts(:welcome).comments.not_again.find_most_recent
+  end
+
+  def test_extension_with_dirty_target
+    comment = posts(:welcome).comments.build(body: "New comment")
+    assert_equal comment, posts(:welcome).comments.with_content("New comment")
+  end
+
   def test_marshalling_extensions
     david = developers(:david)
     assert_equal projects(:action_controller), david.projects.find_most_recent
 
-    david = Marshal.load(Marshal.dump(david))
-    assert_equal projects(:action_controller), david.projects.find_most_recent
+    marshalled = Marshal.dump(david)
+
+    # Marshaling an association shouldn't make it unusable by wiping its reflection.
+    assert_not_nil david.association(:projects).reflection
+
+    david_too = Marshal.load(marshalled)
+    assert_equal projects(:action_controller), david_too.projects.find_most_recent
   end
 
   def test_marshalling_named_extensions
     david = developers(:david)
     assert_equal projects(:action_controller), david.projects_extended_by_name.find_most_recent
 
-    david = Marshal.load(Marshal.dump(david))
+    marshalled = Marshal.dump(david)
+    david      = Marshal.load(marshalled)
+
     assert_equal projects(:action_controller), david.projects_extended_by_name.find_most_recent
   end
 
+  def test_extension_name
+    extend!(Developer)
+    extend!(MyApplication::Business::Developer)
 
-	def test_extension_name
-	  extension = Proc.new {}
-	  name = :association_name
-
-	  assert_equal 'DeveloperAssociationNameAssociationExtension', Developer.send(:create_extension_modules, name, extension, []).first.name
-	  assert_equal 'MyApplication::Business::DeveloperAssociationNameAssociationExtension',
-MyApplication::Business::Developer.send(:create_extension_modules, name, extension, []).first.name
-    assert_equal 'MyApplication::Business::DeveloperAssociationNameAssociationExtension', MyApplication::Business::Developer.send(:create_extension_modules, name, extension, []).first.name
-    assert_equal 'MyApplication::Business::DeveloperAssociationNameAssociationExtension', MyApplication::Business::Developer.send(:create_extension_modules, name, extension, []).first.name
+    assert Developer.const_get "AssociationNameAssociationExtension"
+    assert MyApplication::Business::Developer.const_get "AssociationNameAssociationExtension"
   end
 
+  def test_proxy_association_after_scoped
+    post = posts(:welcome)
+    assert_equal post.association(:comments), post.comments.the_association
+    assert_equal post.association(:comments), post.comments.where("1=1").the_association
+  end
 
+  def test_association_with_default_scope
+    assert_raises OopsError do
+      posts(:welcome).comments.destroy_all
+    end
+  end
+
+  private
+    def extend!(model)
+      ActiveRecord::Associations::Builder::HasMany.send(:define_extensions, model, :association_name) { }
+    end
 end

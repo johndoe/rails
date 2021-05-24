@@ -1,9 +1,11 @@
-module ActionMailer
-  module VERSION #:nodoc:
-    MAJOR = 2
-    MINOR = 2
-    TINY  = 0
+# frozen_string_literal: true
 
-    STRING = [MAJOR, MINOR, TINY].join('.')
+require_relative "gem_version"
+
+module ActionMailer
+  # Returns the version of the currently loaded Action Mailer as a
+  # <tt>Gem::Version</tt>.
+  def self.version
+    gem_version
   end
 end

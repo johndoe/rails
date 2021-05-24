@@ -1,24 +1,36 @@
-$:.unshift File.dirname(__FILE__) + "/../../activesupport/lib"
-$:.unshift File.dirname(__FILE__) + "/../../actionpack/lib"
-$:.unshift File.dirname(__FILE__) + "/../lib"
-$:.unshift File.dirname(__FILE__) + "/../builtin/rails_info"
+# frozen_string_literal: true
 
-require 'test/unit'
-require 'stringio'
-require 'active_support'
+ENV["RAILS_ENV"] ||= "test"
 
-# Wrap tests that use Mocha and skip if unavailable.
-def uses_mocha(test_name)
-  require 'rubygems'
-  gem 'mocha', '>= 0.5.5'
-  require 'mocha'
-  yield
-rescue LoadError
-  $stderr.puts "Skipping #{test_name} tests. `gem install mocha` and try again."
+require "stringio"
+require "active_support/testing/autorun"
+require "active_support/testing/stream"
+require "fileutils"
+
+require "active_support"
+require "action_controller"
+require "action_view"
+require "rails/all"
+
+module TestApp
+  class Application < Rails::Application
+    config.root = __dir__
+  end
 end
 
-if defined?(RAILS_ROOT)
-  RAILS_ROOT.replace File.dirname(__FILE__)
-else
-  RAILS_ROOT = File.dirname(__FILE__)
+class ActiveSupport::TestCase
+  include ActiveSupport::Testing::Stream
+
+  private
+    # Skips the current run on Rubinius using Minitest::Assertions#skip
+    def rubinius_skip(message = "")
+      skip message if RUBY_ENGINE == "rbx"
+    end
+
+    # Skips the current run on JRuby using Minitest::Assertions#skip
+    def jruby_skip(message = "")
+      skip message if defined?(JRUBY_VERSION)
+    end
 end
+
+require_relative "../../tools/test_common"

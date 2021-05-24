@@ -1,79 +1,68 @@
-#--
-# Copyright (c) 2004-2008 David Heinemeier Hansson
-#
-# Permission is hereby granted, free of charge, to any person obtaining
-# a copy of this software and associated documentation files (the
-# "Software"), to deal in the Software without restriction, including
-# without limitation the rights to use, copy, modify, merge, publish,
-# distribute, sublicense, and/or sell copies of the Software, and to
-# permit persons to whom the Software is furnished to do so, subject to
-# the following conditions:
-#
-# The above copyright notice and this permission notice shall be
-# included in all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-# LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-# WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-#++
+# frozen_string_literal: true
 
-begin
-  require 'active_support'
-rescue LoadError
-  activesupport_path = "#{File.dirname(__FILE__)}/../../activesupport/lib"
-  if File.directory?(activesupport_path)
-    $:.unshift activesupport_path
-    require 'active_support'
+require "abstract_controller"
+require "action_dispatch"
+require "action_controller/metal/strong_parameters"
+
+module ActionController
+  extend ActiveSupport::Autoload
+
+  autoload :API
+  autoload :Base
+  autoload :Metal
+  autoload :Renderer
+  autoload :FormBuilder
+
+  eager_autoload do
+    autoload :Caching
   end
+
+  autoload_under "metal" do
+    eager_autoload do
+      autoload :Live
+    end
+
+    autoload :ConditionalGet
+    autoload :ContentSecurityPolicy
+    autoload :Cookies
+    autoload :DataStreaming
+    autoload :DefaultHeaders
+    autoload :EtagWithTemplateDigest
+    autoload :EtagWithFlash
+    autoload :PermissionsPolicy
+    autoload :Flash
+    autoload :Head
+    autoload :Helpers
+    autoload :HttpAuthentication
+    autoload :BasicImplicitRender
+    autoload :ImplicitRender
+    autoload :Instrumentation
+    autoload :Logging
+    autoload :MimeResponds
+    autoload :ParamsWrapper
+    autoload :Redirecting
+    autoload :Renderers
+    autoload :Rendering
+    autoload :RequestForgeryProtection
+    autoload :Rescue
+    autoload :Streaming
+    autoload :StrongParameters
+    autoload :ParameterEncoding
+    autoload :Testing
+    autoload :UrlFor
+  end
+
+  autoload_under "api" do
+    autoload :ApiRendering
+  end
+
+  autoload :TestCase,           "action_controller/test_case"
+  autoload :TemplateAssertions, "action_controller/test_case"
 end
 
-$:.unshift "#{File.dirname(__FILE__)}/action_controller/vendor/html-scanner"
-
-require 'action_controller/base'
-require 'action_controller/request'
-require 'action_controller/rescue'
-require 'action_controller/benchmarking'
-require 'action_controller/flash'
-require 'action_controller/filters'
-require 'action_controller/layout'
-require 'action_controller/mime_responds'
-require 'action_controller/helpers'
-require 'action_controller/cookies'
-require 'action_controller/cgi_process'
-require 'action_controller/caching'
-require 'action_controller/verification'
-require 'action_controller/streaming'
-require 'action_controller/session_management'
-require 'action_controller/http_authentication'
-require 'action_controller/components'
-require 'action_controller/rack_process'
-require 'action_controller/record_identifier'
-require 'action_controller/request_forgery_protection'
-require 'action_controller/headers'
-require 'action_controller/translation'
-
-require 'action_view'
-
-ActionController::Base.class_eval do
-  include ActionController::Flash
-  include ActionController::Filters
-  include ActionController::Layout
-  include ActionController::Benchmarking
-  include ActionController::Rescue
-  include ActionController::MimeResponds
-  include ActionController::Helpers
-  include ActionController::Cookies
-  include ActionController::Caching
-  include ActionController::Verification
-  include ActionController::Streaming
-  include ActionController::SessionManagement
-  include ActionController::HttpAuthentication::Basic::ControllerMethods
-  include ActionController::Components
-  include ActionController::RecordIdentifier
-  include ActionController::RequestForgeryProtection
-  include ActionController::Translation
-end
+# Common Active Support usage in Action Controller
+require "active_support/core_ext/module/attribute_accessors"
+require "active_support/core_ext/load_error"
+require "active_support/core_ext/module/attr_internal"
+require "active_support/core_ext/name_error"
+require "active_support/inflector"

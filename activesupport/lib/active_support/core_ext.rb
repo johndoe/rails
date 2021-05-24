@@ -1,4 +1,5 @@
-Dir[File.dirname(__FILE__) + "/core_ext/*.rb"].sort.each do |path|
-  filename = File.basename(path)
-  require "active_support/core_ext/#{filename}"
+# frozen_string_literal: true
+
+Dir.glob(File.expand_path("core_ext/*.rb", __dir__)).sort.each do |path|
+  require path
 end

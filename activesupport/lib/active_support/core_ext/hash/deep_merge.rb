@@ -1,22 +1,33 @@
-module ActiveSupport #:nodoc:
-  module CoreExtensions #:nodoc:
-    module Hash #:nodoc:
-      # Allows for deep merging
-      module DeepMerge
-        # Returns a new hash with +self+ and +other_hash+ merged recursively.
-        def deep_merge(other_hash)
-          self.merge(other_hash) do |key, oldval, newval|
-            oldval = oldval.to_hash if oldval.respond_to?(:to_hash)
-            newval = newval.to_hash if newval.respond_to?(:to_hash)
-            oldval.class.to_s == 'Hash' && newval.class.to_s == 'Hash' ? oldval.deep_merge(newval) : newval
-          end
-        end
+# frozen_string_literal: true
 
-        # Returns a new hash with +self+ and +other_hash+ merged recursively.
-        # Modifies the receiver in place.
-        def deep_merge!(other_hash)
-          replace(deep_merge(other_hash))
-        end
+class Hash
+  # Returns a new hash with +self+ and +other_hash+ merged recursively.
+  #
+  #   h1 = { a: true, b: { c: [1, 2, 3] } }
+  #   h2 = { a: false, b: { x: [3, 4, 5] } }
+  #
+  #   h1.deep_merge(h2) # => { a: false, b: { c: [1, 2, 3], x: [3, 4, 5] } }
+  #
+  # Like with Hash#merge in the standard library, a block can be provided
+  # to merge values:
+  #
+  #   h1 = { a: 100, b: 200, c: { c1: 100 } }
+  #   h2 = { b: 250, c: { c1: 200 } }
+  #   h1.deep_merge(h2) { |key, this_val, other_val| this_val + other_val }
+  #   # => { a: 100, b: 450, c: { c1: 300 } }
+  def deep_merge(other_hash, &block)
+    dup.deep_merge!(other_hash, &block)
+  end
+
+  # Same as +deep_merge+, but modifies +self+.
+  def deep_merge!(other_hash, &block)
+    merge!(other_hash) do |key, this_val, other_val|
+      if this_val.is_a?(Hash) && other_val.is_a?(Hash)
+        this_val.deep_merge(other_val, &block)
+      elsif block_given?
+        block.call(key, this_val, other_val)
+      else
+        other_val
       end
     end
   end

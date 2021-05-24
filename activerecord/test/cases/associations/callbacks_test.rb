@@ -1,19 +1,21 @@
+# frozen_string_literal: true
+
 require "cases/helper"
-require 'models/post'
-require 'models/comment'
-require 'models/author'
-require 'models/category'
-require 'models/project'
-require 'models/developer'
+require "models/post"
+require "models/author"
+require "models/project"
+require "models/developer"
+require "models/computer"
+require "models/company"
 
 class AssociationCallbacksTest < ActiveRecord::TestCase
-  fixtures :posts, :authors, :projects, :developers
+  fixtures :posts, :authors, :author_addresses, :projects, :developers
 
   def setup
     @david = authors(:david)
     @thinking = posts(:thinking)
     @authorless = posts(:authorless)
-    assert @david.post_log.empty?
+    assert_empty @david.post_log
   end
 
   def test_adding_macro_callbacks
@@ -60,21 +62,38 @@ class AssociationCallbacksTest < ActiveRecord::TestCase
                   "after_adding#{@thinking.id}", "after_adding_proc#{@thinking.id}"], @david.post_log
   end
 
+  def test_has_many_callbacks_halt_execution_when_abort_is_trown_when_adding_to_association
+    author = Author.create!(name: "Roger")
+    post = Post.create!(title: "hello", body: "abc")
+    author.posts_with_thrown_callbacks << post
+
+    assert_empty(author.posts_with_callbacks)
+  end
+
+  def test_has_many_callbacks_halt_execution_when_abort_is_trown_when_removing_from_association
+    author = Author.create!(name: "Roger")
+    post = Post.create!(title: "hello", body: "abc", author: author)
+
+    assert_equal(1, author.posts_with_thrown_callbacks.size)
+    author.posts_with_thrown_callbacks.destroy(post.id)
+    assert_equal(1, author.posts_with_thrown_callbacks.size)
+  end
+
   def test_has_many_callbacks_with_create
-    morten = Author.create :name => "Morten"
-    post = morten.posts_with_proc_callbacks.create! :title => "Hello", :body => "How are you doing?"
+    morten = Author.create name: "Morten"
+    post = morten.posts_with_proc_callbacks.create! title: "Hello", body: "How are you doing?"
     assert_equal ["before_adding<new>", "after_adding#{post.id}"], morten.post_log
   end
 
   def test_has_many_callbacks_with_create!
-    morten = Author.create! :name => "Morten"
-    post = morten.posts_with_proc_callbacks.create :title => "Hello", :body => "How are you doing?"
+    morten = Author.create! name: "Morten"
+    post = morten.posts_with_proc_callbacks.create title: "Hello", body: "How are you doing?"
     assert_equal ["before_adding<new>", "after_adding#{post.id}"], morten.post_log
   end
 
   def test_has_many_callbacks_for_save_on_parent
-    jack = Author.new :name => "Jack"
-    post = jack.posts_with_callbacks.build :title => "Call me back!", :body => "Before you wake up and after you sleep"
+    jack = Author.new name: "Jack"
+    jack.posts_with_callbacks.build title: "Call me back!", body: "Before you wake up and after you sleep"
 
     callback_log = ["before_adding<new>", "after_adding#{jack.posts_with_callbacks.first.id}"]
     assert_equal callback_log, jack.post_log
@@ -83,10 +102,18 @@ class AssociationCallbacksTest < ActiveRecord::TestCase
     assert_equal callback_log, jack.post_log
   end
 
+  def test_has_many_callbacks_for_destroy_on_parent
+    firm = Firm.create! name: "Firm"
+    client = firm.clients.create! name: "Client"
+    firm.destroy
+
+    assert_equal ["before_remove#{client.id}", "after_remove#{client.id}"], firm.log
+  end
+
   def test_has_and_belongs_to_many_add_callback
     david = developers(:david)
     ar = projects(:active_record)
-    assert ar.developers_log.empty?
+    assert_empty ar.developers_log
     ar.developers_with_callbacks << david
     assert_equal ["before_adding#{david.id}", "after_adding#{david.id}"], ar.developers_log
     ar.developers_with_callbacks << david
@@ -94,26 +121,46 @@ class AssociationCallbacksTest < ActiveRecord::TestCase
                   "after_adding#{david.id}"], ar.developers_log
   end
 
-  def test_has_and_belongs_to_many_after_add_called_after_save
-    ar = projects(:active_record)
-    assert ar.developers_log.empty?
-    alice = Developer.new(:name => 'alice')
-    ar.developers_with_callbacks << alice
-    assert_equal"after_adding#{alice.id}", ar.developers_log.last
-
-    bob = ar.developers_with_callbacks.create(:name => 'bob')
-    assert_equal "after_adding#{bob.id}", ar.developers_log.last
-
-    ar.developers_with_callbacks.build(:name => 'charlie')
-    assert_equal "after_adding<new>", ar.developers_log.last
+  def test_has_and_belongs_to_many_before_add_called_before_save
+    dev     = nil
+    new_dev = nil
+    klass = Class.new(Project) do
+      def self.name; Project.name; end
+      has_and_belongs_to_many :developers_with_callbacks,
+                                class_name: "Developer",
+                                before_add: lambda { |o, r|
+        dev     = r
+        new_dev = r.new_record?
+      }
+    end
+    rec = klass.create!
+    alice = Developer.new(name: "alice")
+    rec.developers_with_callbacks << alice
+    assert_equal alice, dev
+    assert_not_nil new_dev
+    assert new_dev, "record should not have been saved"
+    assert_not_predicate alice, :new_record?
   end
 
+  def test_has_and_belongs_to_many_after_add_called_after_save
+    ar = projects(:active_record)
+    assert_empty ar.developers_log
+    alice = Developer.new(name: "alice")
+    ar.developers_with_callbacks << alice
+    assert_equal "after_adding#{alice.id}", ar.developers_log.last
+
+    bob = ar.developers_with_callbacks.create(name: "bob")
+    assert_equal "after_adding#{bob.id}", ar.developers_log.last
+
+    ar.developers_with_callbacks.build(name: "charlie")
+    assert_equal "after_adding<new>", ar.developers_log.last
+  end
 
   def test_has_and_belongs_to_many_remove_callback
     david = developers(:david)
     jamis = developers(:jamis)
     activerecord = projects(:active_record)
-    assert activerecord.developers_log.empty?
+    assert_empty activerecord.developers_log
     activerecord.developers_with_callbacks.delete(david)
     assert_equal ["before_removing#{david.id}", "after_removing#{david.id}"], activerecord.developers_log
 
@@ -122,23 +169,23 @@ class AssociationCallbacksTest < ActiveRecord::TestCase
                   "after_removing#{jamis.id}"], activerecord.developers_log
   end
 
-  def test_has_and_belongs_to_many_remove_callback_on_clear
+  def test_has_and_belongs_to_many_does_not_fire_callbacks_on_clear
     activerecord = projects(:active_record)
-    assert activerecord.developers_log.empty?
+    assert_empty activerecord.developers_log
     if activerecord.developers_with_callbacks.size == 0
       activerecord.developers << developers(:david)
       activerecord.developers << developers(:jamis)
       activerecord.reload
       assert activerecord.developers_with_callbacks.size == 2
     end
-    log_array = activerecord.developers_with_callbacks.collect {|d| ["before_removing#{d.id}","after_removing#{d.id}"]}.flatten.sort
+    activerecord.developers_with_callbacks.flat_map { |d| ["before_removing#{d.id}", "after_removing#{d.id}"] }.sort
     assert activerecord.developers_with_callbacks.clear
-    assert_equal log_array, activerecord.developers_log.sort
+    assert_empty activerecord.developers_log
   end
 
-  def test_has_many_and_belongs_to_many_callbacks_for_save_on_parent
-    project = Project.new :name => "Callbacks"
-    project.developers_with_callbacks.build :name => "Jack", :salary => 95000
+  def test_has_and_belongs_to_many_callbacks_for_save_on_parent
+    project = Project.new name: "Callbacks"
+    project.developers_with_callbacks.build name: "Jack", salary: 95000
 
     callback_log = ["before_adding<new>", "after_adding<new>"]
     assert_equal callback_log, project.developers_log
@@ -148,14 +195,14 @@ class AssociationCallbacksTest < ActiveRecord::TestCase
   end
 
   def test_dont_add_if_before_callback_raises_exception
-    assert !@david.unchangable_posts.include?(@authorless)
+    assert_not_includes @david.unchangeable_posts, @authorless
     begin
-      @david.unchangable_posts << @authorless
-    rescue Exception => e
+      @david.unchangeable_posts << @authorless
+    rescue Exception
     end
-    assert @david.post_log.empty?
-    assert !@david.unchangable_posts.include?(@authorless)
+    assert_empty @david.post_log
+    assert_not_includes @david.unchangeable_posts, @authorless
     @david.reload
-    assert !@david.unchangable_posts.include?(@authorless)
+    assert_not_includes @david.unchangeable_posts, @authorless
   end
 end
